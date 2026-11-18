@@ -38,6 +38,61 @@ size-dependent block choices to be established separately.
 | Large (l) | 1.00 | 1.00 | 512 |
 | Extra-large (x) | 1.00 | 1.50 | 512 |
 
+## Source-backed details for nano
+
+The stage numbers below follow Wu et al., Figure 4. Saeheaw and Zhao,
+Appendix B, Algorithm A1, independently describe the same joins and give
+tensor sizes for a 640 × 640 input. Read A1 for the baseline. The subsequent
+algorithms describe experimental replacements. [Wu et al.](https://doi.org/10.3390/bioengineering12020134)
+and [Saeheaw and Zhao](https://doi.org/10.3390/buildings16091728).
+
+| Join stage | Inputs, in the order reported by A1 | Following C3k2 output (channels × height × width) |
+|---|---|---|
+| 12 | Upsampled stage 10, backbone stage 6 | Stage 13 · 128 × 40 × 40 |
+| 15 | Upsampled stage 13, backbone stage 4 | Stage 16 · 64 × 80 × 80 (P3) |
+| 18 | Downsampled stage 16, neck stage 13 | Stage 19 · 128 × 40 × 40 (P4) |
+| 21 | Downsampled stage 19, backbone stage 10 | Stage 22 · 256 × 20 × 20 (P5) |
+
+Both upsampling steps double the spatial dimensions. Both downsampling steps
+use a 3 × 3 convolution with stride 2. The head receives stages 16, 19 and
+22 at strides 8, 16 and 32. A synthetic 640 × 640 shape test can therefore
+expect 6,400, 1,600 and 400 prediction sites respectively. The interpolation
+mode still needs a source. [Saeheaw and Zhao, Algorithm A1](https://doi.org/10.3390/buildings16091728)
+and [Feng et al., baseline Figure 1](https://doi.org/10.3390/fire9110478).
+
+**Scaling and rounding.** A1 supplies concrete nano widths, including 16 and
+32 for the first two convolutions. An independent contributor can use the
+published widths directly for a fixed nano graph. The scale presets and these
+already-scaled widths cannot distinguish the channel divisor, rounding
+direction, cap order, repeat minimum or half-way tie rule. A1 reports repeat
+arguments for individual stages, but gives no rule for converting a family
+repeat count into an instantiated nano block count. Verify those counts
+separately before claiming parity. [Algorithm A1](https://doi.org/10.3390/buildings16091728)
+and [Xu et al., Table 1](https://doi.org/10.3390/rs17203414).
+
+**Attention.** A1 reports a 256-channel, 20 × 20 output at stage 10 with
+expansion parameter 0.5. Meng et al., Figure 2a, shows one split path passing
+through PSA blocks and the other reaching the concatenation directly. Neither
+source specifies the nano head count, per-head query/key/value widths, or
+positional projection. The outer expansion parameter alone cannot determine
+those dimensions. [Algorithm A1](https://doi.org/10.3390/buildings16091728)
+and [Meng et al., Figure 2a](https://doi.org/10.3390/s25175311).
+
+**Detection head.** Feng et al., Figure 1, shows separate box and class towers
+at each level, with two convolution stages drawn in each tower. At each site
+the raw output has four distributions of `reg_max` logits and one logit per
+class. Zhang et al. describe depthwise and pointwise convolution in the
+baseline Detect module. Exact assignment of those operators to layers, tower
+widths, bin count, grid origin and decoding order still need source support.
+Keep the raw tower contract distinct from the decoded adapter contract below.
+[Feng et al., baseline Figure 1](https://doi.org/10.3390/fire9110478)
+and [Zhang et al., YOLO11n architecture](https://doi.org/10.1007/s44443-025-00116-0).
+
+These additional papers publish their architectural descriptions under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The notes summarize
+the authors' descriptions in new wording. The article licenses cover the
+papers; code and checkpoint provenance require separate evidence.
+
 ## Independent implementation of nano
 
 1. **Establish the graph.** Start with the baseline nano diagram in Wu et al.,
