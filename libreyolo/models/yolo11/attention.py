@@ -1,11 +1,16 @@
 """C2PSA interface for the YOLO11 family.
 
-The cited sources establish the outer contract only: stage 10 receives the
+The cited sources establish the outer structure only: stage 10 receives the
 SPPF output and returns the same shape, the outer expansion is 0.5, and the
 block is an initial convolution, a sequence of PSA blocks, a concatenation and
-a final convolution. Every inner detail is a caller decision carried by
-:class:`PSATopology`; this module does not choose a topology and makes no
-parity claim.
+a final convolution. PSA blocks carry residual connections.
+
+Widths, packing, split ratio, position kernel, feed-forward kernel and
+dimension, and residual use are caller decisions carried by
+:class:`PSATopology` and the ``C2PSA`` arguments. The two-convolution
+feed-forward form and the use of the native ``Conv`` block for normalization
+and activation are LibreYOLO design decisions, not sourced details. This
+module makes no parity claim.
 
 Evidence for the verified contract is recorded in ``PORT.md``.
 """
@@ -37,20 +42,31 @@ class PSATopology:
     value_width: int
     packing: str
     position_kernel: int | None
+    ffn_kernel: int
     ffn_expansion: float
     residual: bool
 
     def __post_init__(self) -> None:
-        if self.heads <= 0:
-            raise ValueError("heads must be positive")
-        if min(self.query_width, self.key_width, self.value_width) <= 0:
-            raise ValueError("query, key and value widths must be positive")
+        for name in ("heads", "query_width", "key_width", "value_width"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.query_width != self.key_width:
+            raise ValueError("query_width and key_width must match")
         if self.packing not in _PACKINGS:
             raise ValueError(f"packing must be one of {_PACKINGS}")
         if self.position_kernel is not None and (
-            self.position_kernel <= 0 or self.position_kernel % 2 == 0
+            not isinstance(self.position_kernel, int)
+            or self.position_kernel <= 0
+            or self.position_kernel % 2 == 0
         ):
             raise ValueError("position_kernel must be a positive odd integer")
+        if (
+            not isinstance(self.ffn_kernel, int)
+            or self.ffn_kernel <= 0
+            or self.ffn_kernel % 2 == 0
+        ):
+            raise ValueError("ffn_kernel must be a positive odd integer")
         if self.ffn_expansion <= 0:
             raise ValueError("ffn_expansion must be positive")
 
@@ -63,6 +79,9 @@ class PSAAttention(nn.Module):
     stores all query channels, then all key channels, then all value channels.
     When ``position_kernel`` is set, a depthwise convolution of that kernel is
     added to the value map before the attention product.
+
+    The explicit score matrix is quadratic in the number of sites. It is sized
+    for the stage-10 20x20 map and is not intended for finer strides.
     """
 
     def __init__(self, channels: int, topology: PSATopology) -> None:
@@ -156,8 +175,8 @@ class PSABlock(nn.Module):
             raise ValueError("ffn_expansion leaves no hidden channels")
         self.attn = PSAAttention(channels, topology)
         self.ffn = nn.Sequential(
-            Conv(channels, hidden, 1),
-            Conv(hidden, channels, 1, activation=False),
+            Conv(channels, hidden, topology.ffn_kernel),
+            Conv(hidden, channels, topology.ffn_kernel, activation=False),
         )
         self.add = topology.residual
 
@@ -170,10 +189,11 @@ class PSABlock(nn.Module):
 class C2PSA(nn.Module):
     """Split, attention blocks on one branch, concatenate, then project.
 
-    ``cv1`` produces two equal halves. The second half passes through ``blocks``
+    ``cv1`` produces two branches. The second passes through ``blocks``
     PSABlocks while the first reaches the concatenation directly. ``blocks`` is
     required because the sources do not settle the nano repeat count after
-    scaling.
+    scaling, and ``split_ratio`` is required because the split widths are not
+    specified.
     """
 
     def __init__(
@@ -182,6 +202,7 @@ class C2PSA(nn.Module):
         *,
         blocks: int,
         topology: PSATopology,
+        split_ratio: float,
         expansion: float = 0.5,
     ) -> None:
         super().__init__()
@@ -189,18 +210,23 @@ class C2PSA(nn.Module):
             raise ValueError("C2PSA channels must be positive")
         if not 0.0 < expansion < 1.0:
             raise ValueError("expansion must be between 0 and 1")
-        if blocks < 1:
-            raise ValueError("C2PSA needs at least one PSABlock")
-        inner = int(channels * expansion)
-        if inner <= 0:
-            raise ValueError("C2PSA expansion leaves no inner channels")
+        if not isinstance(blocks, int) or blocks < 1:
+            raise ValueError("C2PSA needs a positive integer block count")
+        if not 0.0 < split_ratio < 1.0:
+            raise ValueError("split_ratio must be between 0 and 1")
+        total = 2 * int(channels * expansion)
+        direct = int(total * split_ratio)
+        attended = total - direct
+        if direct <= 0 or attended <= 0:
+            raise ValueError("split_ratio leaves an empty branch")
 
         self.channels = int(channels)
-        self.c = inner
-        self.cv1 = Conv(channels, 2 * inner, 1)
-        self.cv2 = Conv(2 * inner, channels, 1)
+        self.direct_channels = direct
+        self.attended_channels = attended
+        self.cv1 = Conv(channels, total, 1)
+        self.cv2 = Conv(total, channels, 1)
         self.m = nn.Sequential(
-            *(PSABlock(inner, topology) for _ in range(int(blocks)))
+            *(PSABlock(attended, topology) for _ in range(blocks))
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -209,5 +235,7 @@ class C2PSA(nn.Module):
                 f"Expected a BCHW map with {self.channels} channels, "
                 f"got {tuple(x.shape)}"
             )
-        direct, attended = self.cv1(x).split((self.c, self.c), dim=1)
+        direct, attended = self.cv1(x).split(
+            (self.direct_channels, self.attended_channels), dim=1
+        )
         return self.cv2(torch.cat((direct, self.m(attended)), dim=1))

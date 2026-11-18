@@ -2,10 +2,13 @@
 
 The cited sources establish the three input levels, the two branches, the two
 convolution stages in each, and the two depthwise convolutions in the
-classification branch. Hidden widths, kernels, grouping, ordering, and output
-bias are not established for the baseline nano detector. They are carried by
-:class:`TowerTopology`, so this module makes no topology choice and no parity
-claim.
+classification branch. Widths, kernels, box grouping, stage order, projection
+kernel and output bias are not established for the baseline nano detector.
+They are carried by :class:`TowerTopology`.
+
+The two-stage arrangement and the use of the native ``Conv`` block for
+normalization and activation are LibreYOLO design decisions. This module makes
+no parity claim. Initialization is out of scope.
 
 The raw output contract is the native decoder's: ``64 + C`` channels per level,
 with four consecutive 16-bin groups in left, top, right, bottom order followed
@@ -22,6 +25,9 @@ from torch import Tensor, nn
 
 from ..yolo9.nn import Conv, auto_pad
 
+_STAGE_ORDERS = ("dw_pw", "pw_dw")
+REG_MAX = 16
+
 
 @dataclass(frozen=True)
 class TowerTopology:
@@ -36,26 +42,32 @@ class TowerTopology:
     class_width: int
     box_kernel: int
     class_kernel: int
+    box_groups: int
     projection_kernel: int
+    class_stage_order: str
     output_bias: bool
 
     def __post_init__(self) -> None:
-        if self.box_width <= 0 or self.class_width <= 0:
-            raise ValueError("Tower widths must be positive")
+        for name in ("box_width", "class_width", "box_groups"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         for name in ("box_kernel", "class_kernel", "projection_kernel"):
             value = getattr(self, name)
-            if value <= 0 or value % 2 == 0:
+            if not isinstance(value, int) or value <= 0 or value % 2 == 0:
                 raise ValueError(f"{name} must be a positive odd integer")
+        if self.class_stage_order not in _STAGE_ORDERS:
+            raise ValueError(f"class_stage_order must be one of {_STAGE_ORDERS}")
 
 
 class YOLO11Head(nn.Module):
     """Raw box and class towers over three pyramid levels.
 
-    Each level produces ``4 * reg_max`` box-distribution logits followed by
+    Each level produces 64 box-distribution logits followed by
     ``num_classes`` class logits, concatenated into one map. The box tower uses
     two convolutions and an output projection. The class tower uses two
-    depthwise-convolution and pointwise-projection pairs, then an output
-    projection.
+    depthwise-convolution and pointwise-projection stages, in the caller's
+    order, then an output projection.
     """
 
     def __init__(
@@ -63,30 +75,44 @@ class YOLO11Head(nn.Module):
         num_classes: int,
         in_channels: Sequence[int],
         topology: TowerTopology,
-        *,
-        reg_max: int = 16,
     ) -> None:
         super().__init__()
-        in_channels = tuple(int(c) for c in in_channels)
+        in_channels = tuple(in_channels)
         if len(in_channels) != 3:
             raise ValueError("YOLO11Head expects three input levels")
-        if min(in_channels) <= 0:
-            raise ValueError("Input channels must be positive")
-        if int(num_classes) <= 0:
-            raise ValueError("num_classes must be positive")
-        if int(reg_max) <= 0:
-            raise ValueError("reg_max must be positive")
+        if any(not isinstance(c, int) or c <= 0 for c in in_channels):
+            raise ValueError("Input channels must be positive integers")
+        if not isinstance(num_classes, int) or num_classes <= 0:
+            raise ValueError("num_classes must be a positive integer")
+        for channels in in_channels:
+            if (
+                channels % topology.box_groups
+                or topology.box_width % topology.box_groups
+            ):
+                raise ValueError(
+                    "box_groups must divide every input width and box_width"
+                )
 
         self.in_channels = in_channels
-        self.nc = int(num_classes)
+        self.nc = num_classes
         self.nl = len(in_channels)
-        self.reg_max = int(reg_max)
+        self.reg_max = REG_MAX
         self.no = 4 * self.reg_max + self.nc
 
         self.box_towers = nn.ModuleList(
             nn.Sequential(
-                Conv(channels, topology.box_width, topology.box_kernel),
-                Conv(topology.box_width, topology.box_width, topology.box_kernel),
+                Conv(
+                    channels,
+                    topology.box_width,
+                    topology.box_kernel,
+                    groups=topology.box_groups,
+                ),
+                Conv(
+                    topology.box_width,
+                    topology.box_width,
+                    topology.box_kernel,
+                    groups=topology.box_groups,
+                ),
                 nn.Conv2d(
                     topology.box_width,
                     4 * self.reg_max,
@@ -99,22 +125,9 @@ class YOLO11Head(nn.Module):
         )
         self.class_towers = nn.ModuleList(
             nn.Sequential(
-                nn.Sequential(
-                    Conv(channels, channels, topology.class_kernel, groups=channels),
-                    Conv(channels, topology.class_width, topology.projection_kernel),
-                ),
-                nn.Sequential(
-                    Conv(
-                        topology.class_width,
-                        topology.class_width,
-                        topology.class_kernel,
-                        groups=topology.class_width,
-                    ),
-                    Conv(
-                        topology.class_width,
-                        topology.class_width,
-                        topology.projection_kernel,
-                    ),
+                self._class_stage(channels, topology.class_width, topology),
+                self._class_stage(
+                    topology.class_width, topology.class_width, topology
                 ),
                 nn.Conv2d(
                     topology.class_width,
@@ -127,12 +140,39 @@ class YOLO11Head(nn.Module):
             for channels in in_channels
         )
 
+    @staticmethod
+    def _class_stage(
+        in_channels: int, out_channels: int, topology: TowerTopology
+    ) -> nn.Sequential:
+        """Depthwise and pointwise pair in the caller's order."""
+        if topology.class_stage_order == "dw_pw":
+            return nn.Sequential(
+                Conv(
+                    in_channels,
+                    in_channels,
+                    topology.class_kernel,
+                    groups=in_channels,
+                ),
+                Conv(in_channels, out_channels, topology.projection_kernel),
+            )
+        return nn.Sequential(
+            Conv(in_channels, out_channels, topology.projection_kernel),
+            Conv(
+                out_channels,
+                out_channels,
+                topology.class_kernel,
+                groups=out_channels,
+            ),
+        )
+
     def forward(self, features: Sequence[Tensor]) -> list[Tensor]:
         """Return one raw ``(B, 4 * reg_max + nc, H, W)`` map per level."""
         if len(features) != self.nl:
             raise ValueError(
                 f"Expected {self.nl} feature levels, got {len(features)}"
             )
+        batch = features[0].shape[0]
+        dtype = features[0].dtype
         outputs = []
         for level, channels, box, cls in zip(
             features, self.in_channels, self.box_towers, self.class_towers
@@ -142,5 +182,11 @@ class YOLO11Head(nn.Module):
                     f"Expected a BCHW map with {channels} channels, "
                     f"got {tuple(level.shape)}"
                 )
+            if not level.is_floating_point():
+                raise ValueError("Feature levels must be floating point")
+            if level.shape[0] != batch:
+                raise ValueError("All feature levels must share a batch size")
+            if level.dtype != dtype:
+                raise ValueError("All feature levels must share a dtype")
             outputs.append(torch.cat((box(level), cls(level)), dim=1))
         return outputs

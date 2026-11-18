@@ -42,11 +42,11 @@ size-dependent block choices to be established separately.
 
 ## Source-backed details for nano
 
-The stage numbers below follow Wu et al., Figure 4. Saeheaw and Zhao,
-Appendix B, Algorithm A1, independently describe the same joins and give
+The stage numbers below follow Wu et al., Figure 4. Saeheaw,
+Appendix B, Algorithm A1, independently describes the same joins and gives
 tensor sizes for a 640 × 640 input. Read A1 for the baseline. The subsequent
 algorithms describe experimental replacements. [Wu et al.](https://doi.org/10.3390/bioengineering12020134)
-and [Saeheaw and Zhao](https://doi.org/10.3390/buildings16091728).
+and [Saeheaw](https://doi.org/10.3390/buildings16091728).
 
 | Join stage | Inputs, in the order reported by A1 | Following C3k2 output (channels × height × width) |
 |---|---|---|
@@ -59,7 +59,7 @@ Both upsampling steps double the spatial dimensions. Both downsampling steps
 use a 3 × 3 convolution with stride 2. The head receives stages 16, 19 and
 22 at strides 8, 16 and 32. A synthetic 640 × 640 shape test can therefore
 expect 6,400, 1,600 and 400 prediction sites respectively. The interpolation
-mode still needs a source. [Saeheaw and Zhao, Algorithm A1](https://doi.org/10.3390/buildings16091728)
+mode still needs a source. [Saeheaw, Algorithm A1](https://doi.org/10.3390/buildings16091728)
 and [Feng et al., baseline Figure 1](https://doi.org/10.3390/fire9110478).
 
 **Scaling and rounding.** A1 supplies concrete nano widths, including 16 and
@@ -288,37 +288,47 @@ and [author's description](https://github.com/IMvision12/kyolo/blob/8558c9c941dd
 
 ## Interface implementation from the clean-room handoff
 
-[attention.py](attention.py) and [detect.py](detect.py) implement only the
-contracts the handoff verifies. Every architecture detail it leaves open is a
-required argument, so neither module chooses a topology. `PSATopology` and
-`TowerTopology` carry those choices; a caller that supplies them defines an
-experimental variant, not YOLO11n parity.
+[attention.py](attention.py) and [detect.py](detect.py) implement the contracts
+the handoff verifies. They fix only the structures the sources establish: the
+C2PSA split, attention blocks, concatenation and final convolution; two stages
+in each detection tower; two depthwise convolutions in the classification
+branch. Values and arrangements the sources leave open are required arguments:
+`PSATopology` and `TowerTopology` carry them, and `blocks` and `split_ratio`
+are required by `C2PSA`. A caller that supplies them defines an experimental
+variant, not YOLO11n parity.
+
+Two fixed choices remain in code and are LibreYOLO design decisions, not
+sourced details: the feed-forward path is two convolutions, and every
+convolution block uses the native `Conv` with its BatchNorm and SiLU.
+Initialization is out of scope for this interface.
 
 ### Verified contract and evidence
 
 | Contract | Evidence |
 |---|---|
-| Stage 10 follows SPPF and maps (B, 256, 20, 20) to the same shape | Saeheaw and Zhao, Algorithm A1, line 20: `F10 <- C2PSA(x, 256, n=2, e=0.5)` |
+| Stage 10 follows SPPF and maps (B, 256, 20, 20) to the same shape | Saeheaw, Algorithm A1, line 20: `F10 <- C2PSA(x, 256, n=2, e=0.5)` |
 | Outer expansion parameter 0.5 | Same line |
 | C2PSA is an initial convolution, cascaded PSABlocks, concatenation and a final convolution | Meng et al., Figure 2a and Section 2 text |
 | PSABlocks carry residual connections | Meng et al., Section 2 text |
-| Head inputs are P3 (64, 80, 80), P4 (128, 40, 40) and P5 (256, 20, 20) at 640 | Saeheaw and Zhao, Algorithm A1, lines 29, 34 and 38 |
+| Head inputs are P3 (64, 80, 80), P4 (128, 40, 40) and P5 (256, 20, 20) at 640 | Saeheaw, Algorithm A1, lines 29, 34 and 38 |
 | Detection head has box and classification branches, two convolution stages each | Feng et al., baseline Figure 1 |
 | Classification branch contains two DWConv layers | Wang et al., Agriculture 2025, 15, 1353, Section 2.2.1 |
 | Raw level layout is 64 box channels, four consecutive 16-bin groups in left, top, right, bottom order, then one logit per class | Native `YOLO11nDecoder` and `tests/unit/test_yolo11_decoder.py` |
 
-All three papers are open access under CC BY 4.0. The notes above summarize
-their descriptions in new wording.
+The cited articles are open access under CC BY 4.0; the reference list records
+each DOI. The notes summarize their descriptions in new wording.
 
 ### Open details, supplied by the caller
 
 | Detail | Status |
 |---|---|
-| Nano PSA repeat count after scaling | Open. Algorithm A1 writes `n=2` for the family algorithm; the handoff leaves the instantiated nano count open, so `blocks` is required. |
-| Width entering attention, head count, per-head query/key/value widths and packing | Open. `PSATopology` requires all of them and offers head-major or channel-major packing. |
-| Positional operation | Open. `position_kernel` is required and may be `None`. |
-| Residual placement and feed-forward dimensions | Open. `residual` and `ffn_expansion` are required. |
-| Tower hidden widths, kernels, grouping, ordering, normalization, activation and bias | Open. `TowerTopology` carries widths, kernels and output bias; convolution blocks use the native `Conv` with its normalization and activation. |
+| Nano PSA repeat count after scaling | Open. Algorithm A1 is titled "YOLOv11n" and writes `n=2`, but the handoff leaves the instantiated nano count open because scaling may reduce it. `blocks` is required. |
+| Width entering attention, head count, per-head query/key/value widths and packing | Open. `PSATopology` requires all of them and supports head-major or channel-major packing. |
+| Split widths | Open. `C2PSA` requires `split_ratio`. |
+| Positional operation and feed-forward kernel | Open. `position_kernel` (may be `None`) and `ffn_kernel` are required. |
+| Residual placement and feed-forward dimension | Open. `residual` and `ffn_expansion` are required. |
+| Tower hidden widths, box grouping, class stage order, projection kernel and output bias | Open. `TowerTopology` requires all of them. The classification depthwise grouping is fixed because the source names DWConv. |
+| Initialization | Out of scope for this interface. |
 
 The modules deliberately contain no parameter-count or checkpoint-compatibility
 test. Their parameter counts depend on the caller topology and are not parity
@@ -327,18 +337,20 @@ evidence.
 ### Verification
 
 - `tests/unit/test_yolo11_attention.py` checks shape preservation on a 20x20
-  map and on a rectangular 20x36 map, finite outputs and gradients, the two
-  packing modes, residual wiring and the omitted position term.
-- `tests/unit/test_yolo11_detect.py` checks raw shapes and decoded shapes for
-  two class counts with batch 2 at 640, a rectangular 320x640 canvas, finite
-  gradients and input validation.
+  map and on a rectangular 20x36 map, finite outputs and gradients, both
+  packing modes against an explicit einsum reference, residual on and off, the
+  omitted position term and topology validation.
+- `tests/unit/test_yolo11_detect.py` checks raw and decoded shapes for C=3 and
+  C=80 with batch 2 at 640, decoded level order and strides, a rectangular
+  320x640 canvas, box-first channel order, output bias on and off, both class
+  stage orders, mixed batch and dtype rejection, and gradients.
 - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
   unchanged.
-- `pytest tests/unit/test_yolo11_*.py`: 17 passed.
+- `pytest tests/unit/test_yolo11_*.py`: 24 passed.
 
 ## Paper references
 
-All four articles are published under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+All articles listed below are published under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 Use the baseline YOLO11 material identified below; the papers also describe
 task-specific systems and modified detectors.
 
@@ -346,3 +358,5 @@ task-specific systems and modified detectors.
 - Meng et al. (2025), *Enhanced YOLOv11 Framework for Accurate Multi-Fault Detection in UAV Photovoltaic Inspection*. Figure 2 shows C2PSA and C3K2. [Article](https://doi.org/10.3390/s25175311)
 - Xu et al. (2025), *SRTSOD-YOLO: Stronger Real-Time Small Object Detection Algorithm Based on Improved YOLO11 for UAV Imageries*. Table 1 lists all five baseline scale presets. [Article](https://doi.org/10.3390/rs17203414)
 - Wei et al. (2026), *YOLO-PowerLite V2: An Enhanced Lightweight Detector for Real-Time Tiny Anomaly Identification on Overhead Transmission Lines in Complex Environments*. Table 1 corroborates all five presets. [Article](https://doi.org/10.3390/rs18121937)
+- Wang et al. (2025), *Tomato Yield Estimation Using an Improved Lightweight YOLO11n Network and an Optimized Region Tracking-Counting Method*. Section 2.2.1 describes the two DWConv layers in the classification head. Open access, CC BY 4.0. [Article](https://doi.org/10.3390/agriculture15131353)
+- Feng et al. (2025), *HIFE-YOLO: Hierarchical Information Flow Enhancement for Lightweight Fire and Smoke Detection*. Baseline Figure 1 shows the box and classification towers. Open access, CC BY 4.0. [Article](https://doi.org/10.3390/fire9110478)

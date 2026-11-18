@@ -26,13 +26,14 @@ TOPO = PSATopology(
     value_width=16,
     packing="head_major",
     position_kernel=3,
+    ffn_kernel=1,
     ffn_expansion=2.0,
     residual=True,
 )
 
 
 def test_shape_preservation_on_published_and_rectangular_maps():
-    model = C2PSA(NANO_STAGE_CHANNELS, blocks=1, topology=TOPO).eval()
+    model = C2PSA(NANO_STAGE_CHANNELS, blocks=1, topology=TOPO, split_ratio=0.5).eval()
     square = torch.randn(1, NANO_STAGE_CHANNELS, 20, 20)
     rectangular = torch.randn(1, NANO_STAGE_CHANNELS, 20, 36)
     with torch.no_grad():
@@ -41,7 +42,7 @@ def test_shape_preservation_on_published_and_rectangular_maps():
 
 
 def test_finite_outputs_and_gradients():
-    model = C2PSA(NANO_STAGE_CHANNELS, blocks=2, topology=TOPO).train()
+    model = C2PSA(NANO_STAGE_CHANNELS, blocks=2, topology=TOPO, split_ratio=0.5).train()
     x = torch.randn(2, NANO_STAGE_CHANNELS, 20, 20, requires_grad=True)
     out = model(x)
     assert torch.isfinite(out).all()
@@ -81,18 +82,96 @@ def test_position_term_can_be_omitted():
 def test_rejects_open_topology_violations_and_bad_shapes():
     with pytest.raises(ValueError, match="packing"):
         PSATopology(
-            heads=2,
+            heads=3,
             query_width=8,
             key_width=8,
             value_width=16,
             packing="interleaved",
             position_kernel=3,
+            ffn_kernel=1,
             ffn_expansion=2.0,
             residual=True,
         )
+    with pytest.raises(ValueError, match="match"):
+        replace(TOPO, key_width=4)
+    with pytest.raises(ValueError, match="positive integer"):
+        replace(TOPO, heads=3.0)
     with pytest.raises(ValueError, match="position_kernel"):
         replace(TOPO, position_kernel=2)
-    with pytest.raises(ValueError, match="PSABlock"):
-        C2PSA(64, blocks=0, topology=TOPO)
+    with pytest.raises(ValueError, match="ffn_kernel"):
+        replace(TOPO, ffn_kernel=2)
+    with pytest.raises(ValueError, match="block count"):
+        C2PSA(64, blocks=0, topology=TOPO, split_ratio=0.5)
+    with pytest.raises(ValueError, match="split_ratio"):
+        C2PSA(64, blocks=1, topology=TOPO, split_ratio=1.0)
     with pytest.raises(ValueError, match="channels"):
-        C2PSA(64, blocks=1, topology=TOPO)(torch.zeros(1, 32, 4, 4))
+        C2PSA(64, blocks=1, topology=TOPO, split_ratio=0.5)(
+            torch.zeros(1, 32, 4, 4)
+        )
+
+
+def test_residual_disabled_produces_zero_when_sublayers_are_zeroed():
+    topology = replace(TOPO, residual=False)
+    block = PSABlock(32, topology).eval()
+    with torch.no_grad():
+        block.attn.proj.conv.weight.zero_()
+        block.ffn[-1].conv.weight.zero_()
+    x = torch.randn(1, 32, 5, 5)
+    assert block.add is False
+    torch.testing.assert_close(block(x), torch.zeros_like(x))
+
+
+def _manual_reference(module: PSAAttention, x: torch.Tensor) -> torch.Tensor:
+    """Attention computed with explicit channel slicing and einsum products."""
+    topology = module.topology
+    batch, _, height, width = x.shape
+    sites = height * width
+    packed = module.qkv(x)
+    if topology.packing == "head_major":
+        packed = packed.view(
+            batch,
+            topology.heads,
+            topology.query_width + topology.key_width + topology.value_width,
+            sites,
+        )
+        query, key, value = packed.split(
+            (topology.query_width, topology.key_width, topology.value_width),
+            dim=2,
+        )
+    else:
+        query, key, value = packed.split(
+            (
+                topology.heads * topology.query_width,
+                topology.heads * topology.key_width,
+                topology.heads * topology.value_width,
+            ),
+            dim=1,
+        )
+        query = query.view(batch, topology.heads, topology.query_width, sites)
+        key = key.view(batch, topology.heads, topology.key_width, sites)
+        value = value.view(batch, topology.heads, topology.value_width, sites)
+    if module.pe is not None:
+        value_channels = topology.heads * topology.value_width
+        position = module.pe(value.reshape(batch, value_channels, height, width))
+        value = value + position.view(
+            batch, topology.heads, topology.value_width, sites
+        )
+    scores = torch.einsum("bhwn,bhwm->bhnm", query, key) * module.scale
+    weights = scores.softmax(dim=-1)
+    attended = torch.einsum("bhnm,bhvm->bhnv", weights, value)
+    attended = attended.permute(0, 1, 3, 2)
+    return module.proj(
+        attended.reshape(
+            batch, topology.heads * topology.value_width, height, width
+        )
+    )
+
+
+def test_both_packing_layouts_match_an_explicit_reference():
+    x = torch.randn(2, 32, 3, 5)
+    for packing in ("head_major", "channel_major"):
+        module = PSAAttention(32, replace(TOPO, packing=packing)).eval()
+        with torch.no_grad():
+            torch.testing.assert_close(
+                module(x), _manual_reference(module, x), atol=1e-6, rtol=1e-5
+            )
