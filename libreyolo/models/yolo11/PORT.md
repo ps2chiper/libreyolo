@@ -1,10 +1,12 @@
 # YOLO11 detection port
 
 This branch implements the image and detection boundary using LibreYOLO's native
-preprocessing, letterbox geometry and class-aware postprocessing. A caller supplies
-RGB images and a target canvas, then supplies decoded predictions in the native
-pixel-space xyxy format. Centered padding is a choice for this port. Synthetic
-tests exercise the boundary independently of any model or checkpoint.
+preprocessing, box decoding, letterbox geometry and class-aware postprocessing.
+Call `YOLO11nDecoder()([p3, p4, p5])` on raw maps in stride order (8, 16, 32).
+Each BCHW map contains 64 box logits followed by one logit per class. Pass the
+result directly to `restore_detections` with the original image sizes and the
+centered letterbox canvas size. Synthetic tests exercise this path.
+[Decoder](decoder.py) and [image adapters](transforms.py).
 
 ## Provenance decision needed
 
@@ -18,7 +20,7 @@ assignment, EMA, mosaic, batching and evaluation. Exact legacy behavior would
 require a separate provenance decision.
 
 The next integration milestone is a scratch-initialized detector that produces
-the adapter's decoded input. Factory registration, training, validation and
+the decoder's three raw inputs. Factory registration, training, validation and
 export support should follow tests of that detector. This branch contains no
 family weights or download entry.
 
@@ -160,9 +162,9 @@ and [LibreYOLO contribution policy](../../../CONTRIBUTING.md).
    attention dimensions and positional operations against approved sources.
    Reuse native convolution and bottleneck primitives where their contracts fit.
 3. **Connect the prediction head.** Establish the nano prediction towers and
-   their output layout independently. Evaluate LibreYOLO's existing
-   [distribution projection](../yolo9/nn.py) and [box decoder](../yolo9/loss.py)
-   against that design. The existing [port adapter](transforms.py) consumes
+   their output layout independently. The [nano decoder](decoder.py) already
+   reuses the [native LibreYOLO decoding implementation](../yolo9/nn.py).
+   The existing [port adapter](transforms.py) consumes
    decoded pixel-space xyxy boxes and class probabilities, with shape
    `(batch, 4 + classes, anchors)`.
 4. **Verify the scratch model.** Instantiate it with random initialization.

@@ -412,144 +412,17 @@ def default_class_neck(first_channels: int, num_classes: int) -> int:
     return max(int(first_channels), min(int(num_classes), 128))
 
 
-class YOLO9Head(nn.Module):
-    """Anchor-free YOLOv9 detection head over several pyramid levels.
+class DistributionBoxDecoder(nn.Module):
+    """Native decoder for side-major box distributions and per-class logits."""
 
-    Each level has a box tower (``anchor_convs``) predicting ``4 * reg_max``
-    distance-bin logits and a class tower (``class_convs``) predicting
-    ``num_classes`` logits, as in MultimediaTechLab/YOLO ``Detection``; the
-    towers of all levels are held in two module lists.
-
-    Forward contract:
-        * ``targets`` given: the training loss dict (needs ``img_size=(W, H)``).
-        * training, no targets: list of raw maps ``(B, 4 * reg_max + nc, H, W)``
-          per level, box channels first.
-        * eval: ``(decoded, raw)`` where ``decoded`` is ``(B, 4 + nc, N)``:
-          xyxy boxes in input pixels, then sigmoid class scores.
-    """
-
-    def __init__(
-        self,
-        in_channels: Sequence[int],
-        num_classes: int,
-        *,
-        reg_max: int = 16,
-        strides: Sequence[int] = (8, 16, 32),
-        use_group: bool = True,
-        class_neck: Optional[int] = None,
-    ):
+    def __init__(self, reg_max: int, strides: Sequence[int]):
         super().__init__()
-        in_channels = [int(c) for c in in_channels]
-        if len(in_channels) != len(strides):
-            raise ValueError(
-                f"YOLO9Head needs one stride per input level, got "
-                f"{len(in_channels)} levels and strides {tuple(strides)}"
-            )
-
-        self.in_channels = tuple(in_channels)
-        self.num_classes = int(num_classes)
         self.reg_max = int(reg_max)
         self.strides = tuple(int(s) for s in strides)
-        self.export = False
-        self.groups = 4 if use_group else 1
-
-        first_neck = in_channels[0]
-        self.anchor_neck = max(
-            round_up(first_neck // 4, self.groups), 4 * self.reg_max, self.reg_max
-        )
-        if class_neck is None:
-            class_neck = max(first_neck, min(self.num_classes * 2, 128))
-        self.class_neck = int(class_neck)
-
-        self.anchor_convs = self.build_anchor_convs(in_channels)
-        self.class_convs = self.build_class_convs(
-            in_channels, self.class_neck, self.num_classes
-        )
         self.anchor2vec = Anchor2Vec(reg_max=self.reg_max)
-        self.init_bias()
-
-        self._loss_fn = None
-        # Eager-mode anchor grid cache: ((level sizes, device, dtype), anchors, strides).
+        self.export = False
         self._grid_cache = None
-        # Export canvas pinned by freeze_anchor_grid: (level sizes, anchors, strides).
         self._frozen_grid = None
-
-    # ------------------------------------------------------------------
-    # Construction helpers
-    # ------------------------------------------------------------------
-
-    def build_anchor_convs(self, in_channels: Sequence[int]) -> nn.ModuleList:
-        """Box towers: Conv 3x3, grouped Conv 3x3, grouped 1x1 to ``4 * reg_max``."""
-        neck = self.anchor_neck
-        return nn.ModuleList(
-            nn.Sequential(
-                Conv(int(c), neck, 3),
-                Conv(neck, neck, 3, groups=self.groups),
-                nn.Conv2d(neck, 4 * self.reg_max, 1, groups=self.groups),
-            )
-            for c in in_channels
-        )
-
-    def build_class_convs(
-        self, in_channels: Sequence[int], class_neck: int, num_classes: int
-    ) -> nn.ModuleList:
-        """Class towers: Conv 3x3, Conv 3x3, 1x1 to ``num_classes``."""
-        return nn.ModuleList(
-            nn.Sequential(
-                Conv(int(c), int(class_neck), 3),
-                Conv(int(class_neck), int(class_neck), 3),
-                nn.Conv2d(int(class_neck), int(num_classes), 1),
-            )
-            for c in in_channels
-        )
-
-    @torch.no_grad()
-    def init_bias(self) -> None:
-        """MultimediaTechLab bias init: box logits 1.0, class logits -10."""
-        for tower in self.anchor_convs:
-            tower[-1].bias.fill_(1.0)
-        for tower in self.class_convs:
-            tower[-1].bias.fill_(-10.0)
-
-    def set_num_classes(self, num_classes: int) -> None:
-        """Swap only the final 1x1 class convs for a new class count.
-
-        Hidden tower widths are kept (transfer learning); the new class
-        biases are re-initialized and the cached loss is dropped.
-        """
-        num_classes = int(num_classes)
-        for tower in self.class_convs:
-            old = tower[-1]
-            new = nn.Conv2d(old.in_channels, num_classes, 1)
-            tower[-1] = new.to(device=old.weight.device, dtype=old.weight.dtype)
-        with torch.no_grad():
-            for tower in self.class_convs:
-                tower[-1].bias.fill_(-10.0)
-        self.num_classes = num_classes
-        self._loss_fn = None
-
-    # ------------------------------------------------------------------
-    # Forward pieces
-    # ------------------------------------------------------------------
-
-    def branch_outputs(
-        self,
-        features: Sequence[Tensor],
-        anchor_convs: Optional[nn.ModuleList] = None,
-        class_convs: Optional[nn.ModuleList] = None,
-    ) -> List[Tensor]:
-        """Per level ``cat((box logits, class logits), 1)``: ``(B, 4 * reg_max + nc, H, W)``."""
-        anchor_convs = self.anchor_convs if anchor_convs is None else anchor_convs
-        class_convs = self.class_convs if class_convs is None else class_convs
-        if not (len(features) == len(anchor_convs) == len(class_convs)):
-            raise ValueError(
-                f"YOLO9Head got {len(features)} feature levels for "
-                f"{len(anchor_convs)} box / {len(class_convs)} class towers"
-            )
-        return [
-            torch.cat((anchor_conv(feat), class_conv(feat)), 1)
-            for feat, anchor_conv, class_conv in zip(features, anchor_convs, class_convs)
-        ]
 
     def decode(self, raw: Sequence[Tensor]) -> Tensor:
         """Raw level maps -> ``(B, 4 + nc, N)`` xyxy pixel boxes then sigmoid scores.
@@ -640,7 +513,139 @@ class YOLO9Head(nn.Module):
         try:
             return next(self.parameters()).device
         except StopIteration:
-            return torch.device("cpu")
+            return self.anchor2vec.bins.device
+
+
+class YOLO9Head(DistributionBoxDecoder):
+    """Anchor-free YOLOv9 detection head over several pyramid levels.
+
+    Each level has a box tower (``anchor_convs``) predicting ``4 * reg_max``
+    distance-bin logits and a class tower (``class_convs``) predicting
+    ``num_classes`` logits, as in MultimediaTechLab/YOLO ``Detection``; the
+    towers of all levels are held in two module lists.
+
+    Forward contract:
+        * ``targets`` given: the training loss dict (needs ``img_size=(W, H)``).
+        * training, no targets: list of raw maps ``(B, 4 * reg_max + nc, H, W)``
+          per level, box channels first.
+        * eval: ``(decoded, raw)`` where ``decoded`` is ``(B, 4 + nc, N)``:
+          xyxy boxes in input pixels, then sigmoid class scores.
+    """
+
+    def __init__(
+        self,
+        in_channels: Sequence[int],
+        num_classes: int,
+        *,
+        reg_max: int = 16,
+        strides: Sequence[int] = (8, 16, 32),
+        use_group: bool = True,
+        class_neck: Optional[int] = None,
+    ):
+        super().__init__(reg_max=reg_max, strides=strides)
+        in_channels = [int(c) for c in in_channels]
+        if len(in_channels) != len(strides):
+            raise ValueError(
+                f"YOLO9Head needs one stride per input level, got "
+                f"{len(in_channels)} levels and strides {tuple(strides)}"
+            )
+
+        self.in_channels = tuple(in_channels)
+        self.num_classes = int(num_classes)
+        self.groups = 4 if use_group else 1
+
+        first_neck = in_channels[0]
+        self.anchor_neck = max(
+            round_up(first_neck // 4, self.groups), 4 * self.reg_max, self.reg_max
+        )
+        if class_neck is None:
+            class_neck = max(first_neck, min(self.num_classes * 2, 128))
+        self.class_neck = int(class_neck)
+
+        self.anchor_convs = self.build_anchor_convs(in_channels)
+        self.class_convs = self.build_class_convs(
+            in_channels, self.class_neck, self.num_classes
+        )
+        self.init_bias()
+
+        self._loss_fn = None
+
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+
+    def build_anchor_convs(self, in_channels: Sequence[int]) -> nn.ModuleList:
+        """Box towers: Conv 3x3, grouped Conv 3x3, grouped 1x1 to ``4 * reg_max``."""
+        neck = self.anchor_neck
+        return nn.ModuleList(
+            nn.Sequential(
+                Conv(int(c), neck, 3),
+                Conv(neck, neck, 3, groups=self.groups),
+                nn.Conv2d(neck, 4 * self.reg_max, 1, groups=self.groups),
+            )
+            for c in in_channels
+        )
+
+    def build_class_convs(
+        self, in_channels: Sequence[int], class_neck: int, num_classes: int
+    ) -> nn.ModuleList:
+        """Class towers: Conv 3x3, Conv 3x3, 1x1 to ``num_classes``."""
+        return nn.ModuleList(
+            nn.Sequential(
+                Conv(int(c), int(class_neck), 3),
+                Conv(int(class_neck), int(class_neck), 3),
+                nn.Conv2d(int(class_neck), int(num_classes), 1),
+            )
+            for c in in_channels
+        )
+
+    @torch.no_grad()
+    def init_bias(self) -> None:
+        """MultimediaTechLab bias init: box logits 1.0, class logits -10."""
+        for tower in self.anchor_convs:
+            tower[-1].bias.fill_(1.0)
+        for tower in self.class_convs:
+            tower[-1].bias.fill_(-10.0)
+
+    def set_num_classes(self, num_classes: int) -> None:
+        """Swap only the final 1x1 class convs for a new class count.
+
+        Hidden tower widths are kept (transfer learning); the new class
+        biases are re-initialized and the cached loss is dropped.
+        """
+        num_classes = int(num_classes)
+        for tower in self.class_convs:
+            old = tower[-1]
+            new = nn.Conv2d(old.in_channels, num_classes, 1)
+            tower[-1] = new.to(device=old.weight.device, dtype=old.weight.dtype)
+        with torch.no_grad():
+            for tower in self.class_convs:
+                tower[-1].bias.fill_(-10.0)
+        self.num_classes = num_classes
+        self._loss_fn = None
+
+    # ------------------------------------------------------------------
+    # Forward pieces
+    # ------------------------------------------------------------------
+
+    def branch_outputs(
+        self,
+        features: Sequence[Tensor],
+        anchor_convs: Optional[nn.ModuleList] = None,
+        class_convs: Optional[nn.ModuleList] = None,
+    ) -> List[Tensor]:
+        """Per level ``cat((box logits, class logits), 1)``: ``(B, 4 * reg_max + nc, H, W)``."""
+        anchor_convs = self.anchor_convs if anchor_convs is None else anchor_convs
+        class_convs = self.class_convs if class_convs is None else class_convs
+        if not (len(features) == len(anchor_convs) == len(class_convs)):
+            raise ValueError(
+                f"YOLO9Head got {len(features)} feature levels for "
+                f"{len(anchor_convs)} box / {len(class_convs)} class towers"
+            )
+        return [
+            torch.cat((anchor_conv(feat), class_conv(feat)), 1)
+            for feat, anchor_conv, class_conv in zip(features, anchor_convs, class_convs)
+        ]
 
     # ------------------------------------------------------------------
     # Loss
