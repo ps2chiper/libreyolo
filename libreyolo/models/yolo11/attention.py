@@ -143,6 +143,8 @@ class PSAAttention(nn.Module):
                 f"Expected a BCHW map with {self.channels} channels, "
                 f"got {tuple(x.shape)}"
             )
+        if not x.is_floating_point():
+            raise ValueError("Attention input must be floating point")
         batch, _, height, width = x.shape
         sites = height * width
         topology = self.topology
@@ -282,6 +284,8 @@ class C2PSA(nn.Module):
                 f"Expected a BCHW map with {self.channels} channels, "
                 f"got {tuple(x.shape)}"
             )
+        if not x.is_floating_point():
+            raise ValueError("C2PSA input must be floating point")
         direct, attended = self.cv1(x).split(
             (self.direct_channels, self.attended_channels), dim=1
         )

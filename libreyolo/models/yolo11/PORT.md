@@ -26,7 +26,7 @@ family weights or download entry.
 
 ## Published scale presets
 
-The values below appear in Table 1 of both Xu et al. and Wei et al. The table
+The values below appear in Table 1 of Xu et al. and Table 2 of Wei et al. The table
 is reformatted in ascending size order. Both papers publish it under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). These presets
 leave the order of channel capping and rounding, repeat rounding, and
@@ -301,9 +301,10 @@ Fixed choices that remain in code are LibreYOLO design decisions, not sourced
 details: the feed-forward path is two convolutions; the QKV, projection and
 position convolutions use the native `Conv` without activation; both tower
 output projections are bare convolutions without normalization or activation;
-the position term is a depthwise convolution; and every normalized convolution
-block is the native `Conv` with BatchNorm and SiLU. Initialization is out of
-scope for this interface.
+the position term is a depthwise convolution; and the remaining convolution
+blocks (C2PSA cv1/cv2, the FFN and the tower stages) use the native `Conv` with
+BatchNorm and SiLU, except the FFN output convolution, which has no activation.
+Initialization is out of scope for this interface.
 
 ### Verified contract and evidence
 
@@ -331,7 +332,7 @@ each DOI. The notes summarize their descriptions in new wording.
 | Position term | The operation is fixed as a depthwise convolution, a LibreYOLO design decision; `position_kernel` is required and may be `None`. |
 | Feed-forward kernel and dimension | Open. `ffn_kernel` and `ffn_expansion` are required. |
 | Residual placement | Open. `residual` selects both sublayers, attention only, feed-forward only or neither. |
-| Tower hidden widths, box grouping, class stage order, pointwise and output projection kernels, output bias | Open. `TowerTopology` requires all of them. The classification depthwise grouping is fixed because the source names DWConv. |
+| Tower hidden widths, box and class kernels, box grouping, class stage order, pointwise and output projection kernels, output bias | Open. `TowerTopology` requires all of them. The classification depthwise grouping is fixed because the source names DWConv. |
 | Initialization | Out of scope for this interface. |
 
 The modules deliberately contain no parameter-count or checkpoint-compatibility
@@ -342,9 +343,10 @@ evidence.
 
 - `tests/unit/test_yolo11_attention.py` checks shape preservation on a 20x20
   map and on a rectangular 20x36 map, finite outputs and gradients, both
-  packing modes against an explicit channel-index reference, the residual
-  modes, an asymmetric 0.3 split, a 3x3 feed-forward kernel, the omitted
-  position term and topology validation.
+  packing modes against an explicit channel-index reference, all four residual
+    placements, an asymmetric 0.3 split, a 0.25 expansion, a 3x3 feed-forward
+    kernel, rectangular-map gradients, the omitted position term and topology
+    validation.
 - `tests/unit/test_yolo11_detect.py` checks raw and decoded shapes for C=3 and
   C=80 with batch 2 at 640, decoded level order and strides, a rectangular
   320x640 canvas, box-first channel order, output bias on and off, both class
@@ -352,7 +354,7 @@ evidence.
   projections, mixed batch and dtype rejection, and gradients.
 - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
   unchanged.
-- `pytest tests/unit/test_yolo11_*.py`: 28 passed.
+- `pytest tests/unit/test_yolo11_*.py`: 31 passed.
 
 ## Paper references
 
@@ -363,7 +365,7 @@ task-specific systems and modified detectors.
 - Wu et al. (2025), *Deep Learning-Assisted Diagnostic System: Apices and Odontogenic Sinus Floor Level Analysis in Dental Panoramic Radiographs*. Figure 4 shows the YOLO11n graph. [Article](https://doi.org/10.3390/bioengineering12020134)
 - Meng et al. (2025), *Enhanced YOLOv11 Framework for Accurate Multi-Fault Detection in UAV Photovoltaic Inspection*. Figure 2 shows C2PSA and C3K2. [Article](https://doi.org/10.3390/s25175311)
 - Xu et al. (2025), *SRTSOD-YOLO: Stronger Real-Time Small Object Detection Algorithm Based on Improved YOLO11 for UAV Imageries*. Table 1 lists all five baseline scale presets. [Article](https://doi.org/10.3390/rs17203414)
-- Wei et al. (2026), *YOLO-PowerLite V2: An Enhanced Lightweight Detector for Real-Time Tiny Anomaly Identification on Overhead Transmission Lines in Complex Environments*. Table 1 corroborates all five presets. [Article](https://doi.org/10.3390/rs18121937)
+- Wei et al. (2026), *YOLO-PowerLite V2: An Enhanced Lightweight Detector for Real-Time Tiny Anomaly Identification on Overhead Transmission Lines in Complex Environments*. Table 2 corroborates all five presets. [Article](https://doi.org/10.3390/rs18121937)
 - Wang et al. (2025), *Tomato Yield Estimation Using an Improved Lightweight YOLO11n Network and an Optimized Region Tracking-Counting Method*. Section 2.2.1 describes the two DWConv layers in the classification head. [Article](https://doi.org/10.3390/agriculture15131353)
 - Feng et al. (2026), *HIFE-YOLO: Hierarchical Information Flow Enhancement for Lightweight Fire and Smoke Detection*. Baseline Figure 1 shows the box and classification towers. [Article](https://doi.org/10.3390/fire9110478)
 - Saeheaw (2026), *Comparative Evaluation of YOLOv11n Neck-Level Modifications for Precast Component and PPE Object Detection in Construction Environments*. Appendix B, Algorithm A1, gives the nano graph, expansion 0.5 and the P3/P4/P5 sizes. [Article](https://doi.org/10.3390/buildings16091728)

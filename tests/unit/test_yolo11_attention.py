@@ -112,6 +112,10 @@ def test_rejects_open_topology_violations_and_bad_shapes():
         C2PSA(64, blocks=1, topology=TOPO, split_ratio=0.5)(
             torch.zeros(1, 32, 4, 4)
         )
+    with pytest.raises(ValueError, match="floating"):
+        C2PSA(64, blocks=1, topology=TOPO, split_ratio=0.5)(
+            torch.zeros(1, 64, 4, 4, dtype=torch.int64)
+        )
 
 
 def test_residual_disabled_produces_zero_when_sublayers_are_zeroed():
@@ -134,6 +138,38 @@ def test_attention_only_residual_uses_feed_forward_without_addition():
     with torch.no_grad():
         expected = block.ffn(x)
         torch.testing.assert_close(block(x), expected)
+
+
+def test_ffn_only_residual_adds_feed_forward_to_attention_output():
+    topology = replace(TOPO, residual="ffn")
+    block = PSABlock(32, topology).eval()
+    x = torch.randn(1, 32, 5, 5)
+    with torch.no_grad():
+        attended = block.attn(x)
+        expected = attended + block.ffn(attended)
+        torch.testing.assert_close(block(x), expected)
+
+
+def test_rectangular_forward_and_backward_are_finite():
+    model = C2PSA(256, blocks=1, topology=TOPO, split_ratio=0.5).train()
+    x = torch.randn(2, 256, 20, 36, requires_grad=True)
+    out = model(x)
+    assert out.shape == x.shape
+    assert torch.isfinite(out).all()
+    out.square().mean().backward()
+    for parameter in model.parameters():
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+
+
+def test_nonstandard_expansion_preserves_shape():
+    model = C2PSA(
+        256, blocks=1, topology=TOPO, split_ratio=0.5, expansion=0.25
+    ).eval()
+    x = torch.randn(1, 256, 7, 9)
+    with torch.no_grad():
+        assert model(x).shape == x.shape
+    assert model.direct_channels + model.attended_channels == 128
 
 
 def test_asymmetric_split_and_ffn_kernel_preserve_shape():

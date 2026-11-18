@@ -37,7 +37,8 @@ class TowerTopology:
 
     No field has a default. Supplying a topology defines an experimental
     variant; the cited papers do not establish these values for the baseline
-    nano detector.
+    nano detector. Invalid ranges raise ``ValueError``; a non-bool
+    ``output_bias`` raises ``TypeError``.
     """
 
     box_width: int
@@ -196,11 +197,10 @@ class YOLO11Head(nn.Module):
             raise ValueError(
                 f"Expected {self.nl} feature levels, got {len(features)}"
             )
-        batch = features[0].shape[0]
-        dtype = features[0].dtype
+        batch = dtype = None
         outputs = []
-        for level, channels, box, cls in zip(
-            features, self.in_channels, self.box_towers, self.class_towers
+        for index, (level, channels, box, cls) in enumerate(
+            zip(features, self.in_channels, self.box_towers, self.class_towers)
         ):
             if level.ndim != 4 or level.shape[1] != channels:
                 raise ValueError(
@@ -209,9 +209,12 @@ class YOLO11Head(nn.Module):
                 )
             if not level.is_floating_point():
                 raise ValueError("Feature levels must be floating point")
-            if level.shape[0] != batch:
+            if index == 0:
+                batch = level.shape[0]
+                dtype = level.dtype
+            elif level.shape[0] != batch:
                 raise ValueError("All feature levels must share a batch size")
-            if level.dtype != dtype:
+            elif level.dtype != dtype:
                 raise ValueError("All feature levels must share a dtype")
             outputs.append(torch.cat((box(level), cls(level)), dim=1))
         return outputs
