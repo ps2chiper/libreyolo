@@ -21,6 +21,7 @@ TOPO = TowerTopology(
     box_kernel=3,
     class_kernel=3,
     box_groups=1,
+    pointwise_kernel=1,
     projection_kernel=1,
     class_stage_order="dw_pw",
     output_bias=True,
@@ -74,8 +75,8 @@ def test_finite_outputs_and_gradients():
         total = total + level.square().mean()
     total.backward()
     for parameter in head.parameters():
-        if parameter.grad is not None:
-            assert torch.isfinite(parameter.grad).all()
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
 
 
 def test_rejects_wrong_levels_and_channels():
@@ -96,6 +97,7 @@ def test_rejects_incomplete_topology():
             box_kernel=3,
             class_kernel=2,
             box_groups=1,
+            pointwise_kernel=1,
             projection_kernel=1,
             class_stage_order="dw_pw",
             output_bias=True,
@@ -104,6 +106,12 @@ def test_rejects_incomplete_topology():
         replace(TOPO, class_stage_order="depthwise")
     with pytest.raises(ValueError, match="box_groups"):
         YOLO11Head(3, NANO_LEVELS, replace(TOPO, box_groups=5))
+    with pytest.raises(TypeError, match="output_bias"):
+        replace(TOPO, output_bias="yes")
+    with pytest.raises(ValueError, match="num_classes"):
+        YOLO11Head(True, NANO_LEVELS, TOPO)
+    with pytest.raises(ValueError, match="box_kernel"):
+        replace(TOPO, box_kernel=4)
 
 
 def test_box_channels_precede_class_channels():
@@ -161,3 +169,27 @@ def test_rejects_mixed_batch_and_dtype():
     mixed_dtype[1] = mixed_dtype[1].double()
     with pytest.raises(ValueError, match="dtype"):
         head(mixed_dtype)
+
+
+def test_two_stage_structure_is_explicit():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO)
+    assert len(head.box_towers[0]) == 3
+    assert len(head.class_towers[0]) == 3
+    assert len(head.class_towers[0][0]) == 2
+    assert len(head.class_towers[0][1]) == 2
+
+
+def test_grouping_and_nonunit_kernels_preserve_shape():
+    topology = replace(
+        TOPO,
+        box_groups=4,
+        box_kernel=5,
+        class_kernel=5,
+        pointwise_kernel=3,
+        projection_kernel=3,
+    )
+    head = YOLO11Head(3, NANO_LEVELS, topology).eval()
+    assert head.box_towers[0][0].conv.groups == 4
+    with torch.no_grad():
+        raw = head(features(1))
+    assert raw[0].shape == (1, 67, 80, 80)

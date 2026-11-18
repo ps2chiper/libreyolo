@@ -297,10 +297,13 @@ branch. Values and arrangements the sources leave open are required arguments:
 are required by `C2PSA`. A caller that supplies them defines an experimental
 variant, not YOLO11n parity.
 
-Two fixed choices remain in code and are LibreYOLO design decisions, not
-sourced details: the feed-forward path is two convolutions, and every
-convolution block uses the native `Conv` with its BatchNorm and SiLU.
-Initialization is out of scope for this interface.
+Fixed choices that remain in code are LibreYOLO design decisions, not sourced
+details: the feed-forward path is two convolutions; the QKV, projection and
+position convolutions use the native `Conv` without activation; both tower
+output projections are bare convolutions without normalization or activation;
+the position term is a depthwise convolution; and every normalized convolution
+block is the native `Conv` with BatchNorm and SiLU. Initialization is out of
+scope for this interface.
 
 ### Verified contract and evidence
 
@@ -323,11 +326,12 @@ each DOI. The notes summarize their descriptions in new wording.
 | Detail | Status |
 |---|---|
 | Nano PSA repeat count after scaling | Open. Algorithm A1 is titled "YOLOv11n" and writes `n=2`, but the handoff leaves the instantiated nano count open because scaling may reduce it. `blocks` is required. |
-| Width entering attention, head count, per-head query/key/value widths and packing | Open. `PSATopology` requires all of them and supports head-major or channel-major packing. |
+| Head count, per-head query/key/value widths and packing | Open. `PSATopology` requires them. The attended width follows from `channels`, the source-backed expansion 0.5 and the required `split_ratio`. |
 | Split widths | Open. `C2PSA` requires `split_ratio`. |
-| Positional operation and feed-forward kernel | Open. `position_kernel` (may be `None`) and `ffn_kernel` are required. |
-| Residual placement and feed-forward dimension | Open. `residual` and `ffn_expansion` are required. |
-| Tower hidden widths, box grouping, class stage order, projection kernel and output bias | Open. `TowerTopology` requires all of them. The classification depthwise grouping is fixed because the source names DWConv. |
+| Position term | The operation is fixed as a depthwise convolution, a LibreYOLO design decision; `position_kernel` is required and may be `None`. |
+| Feed-forward kernel and dimension | Open. `ffn_kernel` and `ffn_expansion` are required. |
+| Residual placement | Open. `residual` selects both sublayers, attention only, feed-forward only or neither. |
+| Tower hidden widths, box grouping, class stage order, pointwise and output projection kernels, output bias | Open. `TowerTopology` requires all of them. The classification depthwise grouping is fixed because the source names DWConv. |
 | Initialization | Out of scope for this interface. |
 
 The modules deliberately contain no parameter-count or checkpoint-compatibility
@@ -338,15 +342,17 @@ evidence.
 
 - `tests/unit/test_yolo11_attention.py` checks shape preservation on a 20x20
   map and on a rectangular 20x36 map, finite outputs and gradients, both
-  packing modes against an explicit einsum reference, residual on and off, the
-  omitted position term and topology validation.
+  packing modes against an explicit channel-index reference, the residual
+  modes, an asymmetric 0.3 split, a 3x3 feed-forward kernel, the omitted
+  position term and topology validation.
 - `tests/unit/test_yolo11_detect.py` checks raw and decoded shapes for C=3 and
   C=80 with batch 2 at 640, decoded level order and strides, a rectangular
   320x640 canvas, box-first channel order, output bias on and off, both class
-  stage orders, mixed batch and dtype rejection, and gradients.
+  stage orders, box groups of 4 with 5x5 kernels and 3x3 pointwise and output
+  projections, mixed batch and dtype rejection, and gradients.
 - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
   unchanged.
-- `pytest tests/unit/test_yolo11_*.py`: 24 passed.
+- `pytest tests/unit/test_yolo11_*.py`: 28 passed.
 
 ## Paper references
 
@@ -358,5 +364,7 @@ task-specific systems and modified detectors.
 - Meng et al. (2025), *Enhanced YOLOv11 Framework for Accurate Multi-Fault Detection in UAV Photovoltaic Inspection*. Figure 2 shows C2PSA and C3K2. [Article](https://doi.org/10.3390/s25175311)
 - Xu et al. (2025), *SRTSOD-YOLO: Stronger Real-Time Small Object Detection Algorithm Based on Improved YOLO11 for UAV Imageries*. Table 1 lists all five baseline scale presets. [Article](https://doi.org/10.3390/rs17203414)
 - Wei et al. (2026), *YOLO-PowerLite V2: An Enhanced Lightweight Detector for Real-Time Tiny Anomaly Identification on Overhead Transmission Lines in Complex Environments*. Table 1 corroborates all five presets. [Article](https://doi.org/10.3390/rs18121937)
-- Wang et al. (2025), *Tomato Yield Estimation Using an Improved Lightweight YOLO11n Network and an Optimized Region Tracking-Counting Method*. Section 2.2.1 describes the two DWConv layers in the classification head. Open access, CC BY 4.0. [Article](https://doi.org/10.3390/agriculture15131353)
-- Feng et al. (2025), *HIFE-YOLO: Hierarchical Information Flow Enhancement for Lightweight Fire and Smoke Detection*. Baseline Figure 1 shows the box and classification towers. Open access, CC BY 4.0. [Article](https://doi.org/10.3390/fire9110478)
+- Wang et al. (2025), *Tomato Yield Estimation Using an Improved Lightweight YOLO11n Network and an Optimized Region Tracking-Counting Method*. Section 2.2.1 describes the two DWConv layers in the classification head. [Article](https://doi.org/10.3390/agriculture15131353)
+- Feng et al. (2026), *HIFE-YOLO: Hierarchical Information Flow Enhancement for Lightweight Fire and Smoke Detection*. Baseline Figure 1 shows the box and classification towers. [Article](https://doi.org/10.3390/fire9110478)
+- Saeheaw (2026), *Comparative Evaluation of YOLOv11n Neck-Level Modifications for Precast Component and PPE Object Detection in Construction Environments*. Appendix B, Algorithm A1, gives the nano graph, expansion 0.5 and the P3/P4/P5 sizes. [Article](https://doi.org/10.3390/buildings16091728)
+- Zhang et al. (2025), *MSD-YOLO11n: an improved small target detection model for high precision UAV aerial imagery*. Describes the Detect depthwise and pointwise decomposition. [Article](https://doi.org/10.1007/s44443-025-00116-0)

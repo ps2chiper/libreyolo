@@ -18,6 +18,8 @@ Evidence for the verified contract is recorded in ``PORT.md``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
+from numbers import Integral, Real
 
 import torch
 from torch import Tensor, nn
@@ -25,6 +27,7 @@ from torch import Tensor, nn
 from ..yolo9.nn import Conv
 
 _PACKINGS = ("head_major", "channel_major")
+_RESIDUALS = ("both", "attention", "ffn", "none")
 
 
 @dataclass(frozen=True)
@@ -44,31 +47,49 @@ class PSATopology:
     position_kernel: int | None
     ffn_kernel: int
     ffn_expansion: float
-    residual: bool
+    residual: str
 
     def __post_init__(self) -> None:
         for name in ("heads", "query_width", "key_width", "value_width"):
             value = getattr(self, name)
-            if not isinstance(value, int) or value <= 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Integral)
+                or value <= 0
+            ):
                 raise ValueError(f"{name} must be a positive integer")
+            object.__setattr__(self, name, int(value))
         if self.query_width != self.key_width:
             raise ValueError("query_width and key_width must match")
         if self.packing not in _PACKINGS:
             raise ValueError(f"packing must be one of {_PACKINGS}")
-        if self.position_kernel is not None and (
-            not isinstance(self.position_kernel, int)
-            or self.position_kernel <= 0
-            or self.position_kernel % 2 == 0
-        ):
-            raise ValueError("position_kernel must be a positive odd integer")
+        if self.position_kernel is not None:
+            if (
+                isinstance(self.position_kernel, bool)
+                or not isinstance(self.position_kernel, Integral)
+                or self.position_kernel <= 0
+                or self.position_kernel % 2 == 0
+            ):
+                raise ValueError("position_kernel must be a positive odd integer")
+            object.__setattr__(self, "position_kernel", int(self.position_kernel))
         if (
-            not isinstance(self.ffn_kernel, int)
+            isinstance(self.ffn_kernel, bool)
+            or not isinstance(self.ffn_kernel, Integral)
             or self.ffn_kernel <= 0
             or self.ffn_kernel % 2 == 0
         ):
             raise ValueError("ffn_kernel must be a positive odd integer")
-        if self.ffn_expansion <= 0:
-            raise ValueError("ffn_expansion must be positive")
+        object.__setattr__(self, "ffn_kernel", int(self.ffn_kernel))
+        if (
+            isinstance(self.ffn_expansion, bool)
+            or not isinstance(self.ffn_expansion, Real)
+            or not isfinite(self.ffn_expansion)
+            or self.ffn_expansion <= 0
+        ):
+            raise ValueError("ffn_expansion must be a positive finite number")
+        object.__setattr__(self, "ffn_expansion", float(self.ffn_expansion))
+        if self.residual not in _RESIDUALS:
+            raise ValueError(f"residual must be one of {_RESIDUALS}")
 
 
 class PSAAttention(nn.Module):
@@ -86,8 +107,12 @@ class PSAAttention(nn.Module):
 
     def __init__(self, channels: int, topology: PSATopology) -> None:
         super().__init__()
-        if channels <= 0:
-            raise ValueError("Attention channels must be positive")
+        if (
+            isinstance(channels, bool)
+            or not isinstance(channels, Integral)
+            or channels <= 0
+        ):
+            raise ValueError("Attention channels must be a positive integer")
         self.channels = int(channels)
         self.topology = topology
         self.num_heads = topology.heads
@@ -165,7 +190,8 @@ class PSAAttention(nn.Module):
 class PSABlock(nn.Module):
     """Attention sublayer followed by a two-convolution feed-forward sublayer.
 
-    ``residual`` controls whether each sublayer output is added to its input.
+    ``topology.residual`` selects where the residual additions apply: both
+    sublayers, attention only, feed-forward only, or neither.
     """
 
     def __init__(self, channels: int, topology: PSATopology) -> None:
@@ -178,11 +204,17 @@ class PSABlock(nn.Module):
             Conv(channels, hidden, topology.ffn_kernel),
             Conv(hidden, channels, topology.ffn_kernel, activation=False),
         )
-        self.add = topology.residual
+        self.residual = topology.residual
 
     def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(x) if self.add else self.attn(x)
-        x = x + self.ffn(x) if self.add else self.ffn(x)
+        if self.residual in ("both", "attention"):
+            x = x + self.attn(x)
+        else:
+            x = self.attn(x)
+        if self.residual in ("both", "ffn"):
+            x = x + self.ffn(x)
+        else:
+            x = self.ffn(x)
         return x
 
 
@@ -206,27 +238,42 @@ class C2PSA(nn.Module):
         expansion: float = 0.5,
     ) -> None:
         super().__init__()
-        if channels <= 0:
-            raise ValueError("C2PSA channels must be positive")
-        if not 0.0 < expansion < 1.0:
-            raise ValueError("expansion must be between 0 and 1")
-        if not isinstance(blocks, int) or blocks < 1:
+        if (
+            isinstance(channels, bool)
+            or not isinstance(channels, Integral)
+            or channels <= 0
+        ):
+            raise ValueError("C2PSA channels must be a positive integer")
+        channels = int(channels)
+        if (
+            isinstance(expansion, bool)
+            or not isinstance(expansion, Real)
+            or not isfinite(expansion)
+            or not 0.0 < expansion < 1.0
+        ):
+            raise ValueError("expansion must be a finite number between 0 and 1")
+        if not isinstance(blocks, Integral) or isinstance(blocks, bool) or blocks < 1:
             raise ValueError("C2PSA needs a positive integer block count")
-        if not 0.0 < split_ratio < 1.0:
-            raise ValueError("split_ratio must be between 0 and 1")
-        total = 2 * int(channels * expansion)
-        direct = int(total * split_ratio)
+        if (
+            isinstance(split_ratio, bool)
+            or not isinstance(split_ratio, Real)
+            or not isfinite(split_ratio)
+            or not 0.0 < split_ratio < 1.0
+        ):
+            raise ValueError("split_ratio must be a finite number between 0 and 1")
+        total = 2 * int(channels * float(expansion))
+        direct = int(total * float(split_ratio))
         attended = total - direct
         if direct <= 0 or attended <= 0:
             raise ValueError("split_ratio leaves an empty branch")
 
-        self.channels = int(channels)
+        self.channels = channels
         self.direct_channels = direct
         self.attended_channels = attended
         self.cv1 = Conv(channels, total, 1)
         self.cv2 = Conv(total, channels, 1)
         self.m = nn.Sequential(
-            *(PSABlock(attended, topology) for _ in range(blocks))
+            *(PSABlock(attended, topology) for _ in range(int(blocks)))
         )
 
     def forward(self, x: Tensor) -> Tensor:

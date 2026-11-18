@@ -6,9 +6,10 @@ classification branch. Widths, kernels, box grouping, stage order, projection
 kernel and output bias are not established for the baseline nano detector.
 They are carried by :class:`TowerTopology`.
 
-The two-stage arrangement and the use of the native ``Conv`` block for
-normalization and activation are LibreYOLO design decisions. This module makes
-no parity claim. Initialization is out of scope.
+The two-stage arrangement is sourced. The stage wiring, widths, kernels and
+grouping are LibreYOLO design decisions, as is the use of the native ``Conv``
+block for normalization and activation. This module makes no parity claim.
+Initialization is out of scope.
 
 The raw output contract is the native decoder's: ``64 + C`` channels per level,
 with four consecutive 16-bin groups in left, top, right, bottom order followed
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from numbers import Integral
 
 import torch
 from torch import Tensor, nn
@@ -43,6 +45,7 @@ class TowerTopology:
     box_kernel: int
     class_kernel: int
     box_groups: int
+    pointwise_kernel: int
     projection_kernel: int
     class_stage_order: str
     output_bias: bool
@@ -50,14 +53,27 @@ class TowerTopology:
     def __post_init__(self) -> None:
         for name in ("box_width", "class_width", "box_groups"):
             value = getattr(self, name)
-            if not isinstance(value, int) or value <= 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Integral)
+                or value <= 0
+            ):
                 raise ValueError(f"{name} must be a positive integer")
-        for name in ("box_kernel", "class_kernel", "projection_kernel"):
+            object.__setattr__(self, name, int(value))
+        for name in ("box_kernel", "class_kernel", "pointwise_kernel", "projection_kernel"):
             value = getattr(self, name)
-            if not isinstance(value, int) or value <= 0 or value % 2 == 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Integral)
+                or value <= 0
+                or value % 2 == 0
+            ):
                 raise ValueError(f"{name} must be a positive odd integer")
+            object.__setattr__(self, name, int(value))
         if self.class_stage_order not in _STAGE_ORDERS:
             raise ValueError(f"class_stage_order must be one of {_STAGE_ORDERS}")
+        if not isinstance(self.output_bias, bool):
+            raise TypeError("output_bias must be a bool")
 
 
 class YOLO11Head(nn.Module):
@@ -80,10 +96,19 @@ class YOLO11Head(nn.Module):
         in_channels = tuple(in_channels)
         if len(in_channels) != 3:
             raise ValueError("YOLO11Head expects three input levels")
-        if any(not isinstance(c, int) or c <= 0 for c in in_channels):
+        if any(
+            isinstance(c, bool) or not isinstance(c, Integral) or c <= 0
+            for c in in_channels
+        ):
             raise ValueError("Input channels must be positive integers")
-        if not isinstance(num_classes, int) or num_classes <= 0:
+        in_channels = tuple(int(c) for c in in_channels)
+        if (
+            isinstance(num_classes, bool)
+            or not isinstance(num_classes, Integral)
+            or num_classes <= 0
+        ):
             raise ValueError("num_classes must be a positive integer")
+        num_classes = int(num_classes)
         for channels in in_channels:
             if (
                 channels % topology.box_groups
@@ -153,10 +178,10 @@ class YOLO11Head(nn.Module):
                     topology.class_kernel,
                     groups=in_channels,
                 ),
-                Conv(in_channels, out_channels, topology.projection_kernel),
+                Conv(in_channels, out_channels, topology.pointwise_kernel),
             )
         return nn.Sequential(
-            Conv(in_channels, out_channels, topology.projection_kernel),
+            Conv(in_channels, out_channels, topology.pointwise_kernel),
             Conv(
                 out_channels,
                 out_channels,

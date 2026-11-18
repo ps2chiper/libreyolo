@@ -28,7 +28,7 @@ TOPO = PSATopology(
     position_kernel=3,
     ffn_kernel=1,
     ffn_expansion=2.0,
-    residual=True,
+    residual="both",
 )
 
 
@@ -48,8 +48,8 @@ def test_finite_outputs_and_gradients():
     assert torch.isfinite(out).all()
     out.square().mean().backward()
     for parameter in model.parameters():
-        if parameter.grad is not None:
-            assert torch.isfinite(parameter.grad).all()
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
 
 
 def test_packing_selects_a_distinct_channel_layout():
@@ -67,7 +67,7 @@ def test_residual_paths_return_input_when_sublayers_are_zeroed():
         block.attn.proj.conv.weight.zero_()
         block.ffn[-1].conv.weight.zero_()
     x = torch.randn(1, 32, 5, 5)
-    assert block.add is True
+    assert block.residual == "both"
     torch.testing.assert_close(block(x), x)
 
 
@@ -90,8 +90,12 @@ def test_rejects_open_topology_violations_and_bad_shapes():
             position_kernel=3,
             ffn_kernel=1,
             ffn_expansion=2.0,
-            residual=True,
+            residual="both",
         )
+    with pytest.raises(ValueError, match="residual"):
+        replace(TOPO, residual="attn")
+    with pytest.raises(ValueError, match="positive integer"):
+        replace(TOPO, heads=True)
     with pytest.raises(ValueError, match="match"):
         replace(TOPO, key_width=4)
     with pytest.raises(ValueError, match="positive integer"):
@@ -111,14 +115,39 @@ def test_rejects_open_topology_violations_and_bad_shapes():
 
 
 def test_residual_disabled_produces_zero_when_sublayers_are_zeroed():
-    topology = replace(TOPO, residual=False)
+    topology = replace(TOPO, residual="none")
     block = PSABlock(32, topology).eval()
     with torch.no_grad():
         block.attn.proj.conv.weight.zero_()
         block.ffn[-1].conv.weight.zero_()
     x = torch.randn(1, 32, 5, 5)
-    assert block.add is False
+    assert block.residual == "none"
     torch.testing.assert_close(block(x), torch.zeros_like(x))
+
+
+def test_attention_only_residual_uses_feed_forward_without_addition():
+    topology = replace(TOPO, residual="attention")
+    block = PSABlock(32, topology).eval()
+    with torch.no_grad():
+        block.attn.proj.conv.weight.zero_()
+    x = torch.randn(1, 32, 5, 5)
+    with torch.no_grad():
+        expected = block.ffn(x)
+        torch.testing.assert_close(block(x), expected)
+
+
+def test_asymmetric_split_and_ffn_kernel_preserve_shape():
+    model = C2PSA(
+        256,
+        blocks=1,
+        topology=replace(TOPO, ffn_kernel=3),
+        split_ratio=0.3,
+    ).eval()
+    x = torch.randn(2, 256, 7, 9)
+    with torch.no_grad():
+        assert model(x).shape == x.shape
+    assert model.direct_channels + model.attended_channels == 256
+    assert model.direct_channels != model.attended_channels
 
 
 def _manual_reference(module: PSAAttention, x: torch.Tensor) -> torch.Tensor:
@@ -127,29 +156,44 @@ def _manual_reference(module: PSAAttention, x: torch.Tensor) -> torch.Tensor:
     batch, _, height, width = x.shape
     sites = height * width
     packed = module.qkv(x)
-    if topology.packing == "head_major":
-        packed = packed.view(
-            batch,
-            topology.heads,
-            topology.query_width + topology.key_width + topology.value_width,
-            sites,
-        )
-        query, key, value = packed.split(
-            (topology.query_width, topology.key_width, topology.value_width),
-            dim=2,
-        )
-    else:
-        query, key, value = packed.split(
-            (
-                topology.heads * topology.query_width,
-                topology.heads * topology.key_width,
-                topology.heads * topology.value_width,
-            ),
-            dim=1,
-        )
-        query = query.view(batch, topology.heads, topology.query_width, sites)
-        key = key.view(batch, topology.heads, topology.key_width, sites)
-        value = value.view(batch, topology.heads, topology.value_width, sites)
+    queries, keys, values = [], [], []
+    for head in range(topology.heads):
+        if topology.packing == "head_major":
+            base = head * (
+                topology.query_width + topology.key_width + topology.value_width
+            )
+            q_index = range(base, base + topology.query_width)
+            k_index = range(
+                base + topology.query_width,
+                base + topology.query_width + topology.key_width,
+            )
+            v_index = range(
+                base + topology.query_width + topology.key_width,
+                base
+                + topology.query_width
+                + topology.key_width
+                + topology.value_width,
+            )
+        else:
+            q_index = range(
+                head * topology.query_width, (head + 1) * topology.query_width
+            )
+            k_base = topology.heads * topology.query_width
+            k_index = range(
+                k_base + head * topology.key_width,
+                k_base + (head + 1) * topology.key_width,
+            )
+            v_base = k_base + topology.heads * topology.key_width
+            v_index = range(
+                v_base + head * topology.value_width,
+                v_base + (head + 1) * topology.value_width,
+            )
+        queries.append(packed[:, list(q_index)].reshape(batch, topology.query_width, sites))
+        keys.append(packed[:, list(k_index)].reshape(batch, topology.key_width, sites))
+        values.append(packed[:, list(v_index)].reshape(batch, topology.value_width, sites))
+    query = torch.stack(queries, dim=1)
+    key = torch.stack(keys, dim=1)
+    value = torch.stack(values, dim=1)
     if module.pe is not None:
         value_channels = topology.heads * topology.value_width
         position = module.pe(value.reshape(batch, value_channels, height, width))
