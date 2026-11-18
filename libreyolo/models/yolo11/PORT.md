@@ -286,6 +286,56 @@ and [author's description](https://github.com/IMvision12/kyolo/blob/8558c9c941dd
    images of different sizes. Record the implementation sources and any open
    decisions alongside the test results before registering the family.
 
+## Interface implementation from the clean-room handoff
+
+[attention.py](attention.py) and [detect.py](detect.py) implement only the
+contracts the handoff verifies. Every architecture detail it leaves open is a
+required argument, so neither module chooses a topology. `PSATopology` and
+`TowerTopology` carry those choices; a caller that supplies them defines an
+experimental variant, not YOLO11n parity.
+
+### Verified contract and evidence
+
+| Contract | Evidence |
+|---|---|
+| Stage 10 follows SPPF and maps (B, 256, 20, 20) to the same shape | Saeheaw and Zhao, Algorithm A1, line 20: `F10 <- C2PSA(x, 256, n=2, e=0.5)` |
+| Outer expansion parameter 0.5 | Same line |
+| C2PSA is an initial convolution, cascaded PSABlocks, concatenation and a final convolution | Meng et al., Figure 2a and Section 2 text |
+| PSABlocks carry residual connections | Meng et al., Section 2 text |
+| Head inputs are P3 (64, 80, 80), P4 (128, 40, 40) and P5 (256, 20, 20) at 640 | Saeheaw and Zhao, Algorithm A1, lines 29, 34 and 38 |
+| Detection head has box and classification branches, two convolution stages each | Feng et al., baseline Figure 1 |
+| Classification branch contains two DWConv layers | Wang et al., Agriculture 2025, 15, 1353, Section 2.2.1 |
+| Raw level layout is 64 box channels, four consecutive 16-bin groups in left, top, right, bottom order, then one logit per class | Native `YOLO11nDecoder` and `tests/unit/test_yolo11_decoder.py` |
+
+All three papers are open access under CC BY 4.0. The notes above summarize
+their descriptions in new wording.
+
+### Open details, supplied by the caller
+
+| Detail | Status |
+|---|---|
+| Nano PSA repeat count after scaling | Open. Algorithm A1 writes `n=2` for the family algorithm; the handoff leaves the instantiated nano count open, so `blocks` is required. |
+| Width entering attention, head count, per-head query/key/value widths and packing | Open. `PSATopology` requires all of them and offers head-major or channel-major packing. |
+| Positional operation | Open. `position_kernel` is required and may be `None`. |
+| Residual placement and feed-forward dimensions | Open. `residual` and `ffn_expansion` are required. |
+| Tower hidden widths, kernels, grouping, ordering, normalization, activation and bias | Open. `TowerTopology` carries widths, kernels and output bias; convolution blocks use the native `Conv` with its normalization and activation. |
+
+The modules deliberately contain no parameter-count or checkpoint-compatibility
+test. Their parameter counts depend on the caller topology and are not parity
+evidence.
+
+### Verification
+
+- `tests/unit/test_yolo11_attention.py` checks shape preservation on a 20x20
+  map and on a rectangular 20x36 map, finite outputs and gradients, the two
+  packing modes, residual wiring and the omitted position term.
+- `tests/unit/test_yolo11_detect.py` checks raw shapes and decoded shapes for
+  two class counts with batch 2 at 640, a rectangular 320x640 canvas, finite
+  gradients and input validation.
+- The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
+  unchanged.
+- `pytest tests/unit/test_yolo11_*.py`: 17 passed.
+
 ## Paper references
 
 All four articles are published under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
