@@ -203,6 +203,67 @@ and [contribution policy](../../../CONTRIBUTING.md).
   [attention at merge](https://github.com/wang-xinyu/tensorrtx/blob/de7ad561bc23c9d1521337e2b9f330410b77f17e/yolo11/src/block.cpp#L337-L355)
   and [detection at merge](https://github.com/wang-xinyu/tensorrtx/blob/de7ad561bc23c9d1521337e2b9f330410b77f17e/yolo11/src/model.cpp#L238-L262).
 
+### MLX and kyolo source audit
+
+Neither candidate establishes independent provenance for porting the YOLO11n
+attention or detection towers under LibreYOLO's contribution policy. This is
+a source-selection decision for these towers. Matching formulas, adopting
+checkpoint key names and comparing outputs can all be part of interoperability;
+those observations alone cannot establish how the code was authored.
+[LibreYOLO contribution policy](../../../CONTRIBUTING.md).
+
+**walter-grace/yolo11-mlx (MIT).** The published history examined contains a
+single release commit, `98b9384` (April 9, 2026), with the license, both
+towers, predictor and Ultralytics checkpoint converter already present. The
+README advertises nano through medium. The predictor actually constructs
+`YOLO11mModel`, whose architecture is fixed: its attention stage uses 512
+channels and its detection inputs have widths 256, 512 and 512. Only the
+class count is supplied to that constructor. The generic blocks therefore
+give no evidence that the author instantiated or validated the nano towers.
+[License](https://github.com/walter-grace/yolo11-mlx/blob/98b938423b21411a7d719c4f9a7cf0dc5013c9a6/LICENSE),
+[README](https://github.com/walter-grace/yolo11-mlx/blob/98b938423b21411a7d719c4f9a7cf0dc5013c9a6/README.md),
+[predictor](https://github.com/walter-grace/yolo11-mlx/blob/98b938423b21411a7d719c4f9a7cf0dc5013c9a6/yolo11_mlx/predict.py#L164)
+and [model constructor](https://github.com/walter-grace/yolo11-mlx/blob/98b938423b21411a7d719c4f9a7cf0dc5013c9a6/yolo11_mlx/model.py#L335-L371).
+
+- **Attention.** The constructor uses the same sequence of intermediate
+  calculations and names, including `nh_kd`, as the Ultralytics v8.3.0
+  attention constructor. The forward paths also differ in a meaningful way:
+  MLX slices the packed channels into full Q/K/V groups before reshaping each
+  group into heads. The upstream implementation reshapes into heads first
+  and splits Q/K/V within each head. This makes the MLX file an unreliable
+  reference for the upstream packed-channel layout. [MLX attention](https://github.com/walter-grace/yolo11-mlx/blob/98b938423b21411a7d719c4f9a7cf0dc5013c9a6/yolo11_mlx/model.py#L131-L173)
+  and [upstream attention](https://github.com/ultralytics/ultralytics/blob/6e43d1e1e5db72afbf686dee6745669bcb124b0a/ultralytics/nn/modules/block.py#L885-L918).
+- **Detection.** The box/class width formulas and nested branch layout
+  correspond to the upstream Detect module. The model file explicitly
+  describes matching the upstream weight keys. I found no independent design
+  reference or tower-specific authorship account in the release.
+  [MLX model and head](https://github.com/walter-grace/yolo11-mlx/blob/98b938423b21411a7d719c4f9a7cf0dc5013c9a6/yolo11_mlx/model.py#L236-L273)
+  and [upstream Detect](https://github.com/ultralytics/ultralytics/blob/6e43d1e1e5db72afbf686dee6745669bcb124b0a/ultralytics/nn/modules/head.py#L34-L57).
+
+**IMvision12/kyolo (Apache-2.0).** Commit `9b4d2f0` (July 1, 2026)
+introduced the YOLO11 builder, attention and shared head together with an
+Apache-2.0 license. The current builder at `8558c9c` still defaults to nano,
+selects C2PSA and enables the depthwise classification branch. The project
+describes a Keras reimplementation and reports parity with converted official
+checkpoints. [License at introduction](https://github.com/IMvision12/kyolo/blob/9b4d2f0545430e14ed18c99bdd20d0f4771691a9/kyolo/LICENSE),
+[original builder](https://github.com/IMvision12/kyolo/blob/9b4d2f0545430e14ed18c99bdd20d0f4771691a9/kyolo/src/kyolo/models/yolo11.py),
+[current builder](https://github.com/IMvision12/kyolo/blob/8558c9c941dd5ba5bf531ad04bf48677edaaa274/kyolo/models/yolo11/yolo11_model.py)
+and [author's description](https://github.com/IMvision12/kyolo/blob/8558c9c941dd5ba5bf531ad04bf48677edaaa274/README.md).
+
+- **Attention.** The original Keras implementation describes its projections
+  as matching a reference. Its dimension calculations follow the upstream
+  sequence, including the intermediate `nh_kd`; the tensor operations use
+  Keras primitives. The file supplies no separate design source for those
+  choices. [Original attention](https://github.com/IMvision12/kyolo/blob/9b4d2f0545430e14ed18c99bdd20d0f4771691a9/kyolo/src/kyolo/layers/attention.py#L46-L94).
+- **Detection.** The original head explicitly identifies Ultralytics Detect
+  as the naming reference for converted weights. Its box/class width formulas
+  and depthwise classification stages also correspond to Detect. The July 2
+  YOLO11 builder correction explicitly references Ultralytics parser behavior.
+  That documents reference use at the graph level. Neither the introduction
+  nor that correction supplies a permissive design source or a clean-room
+  history for the tower code. [Original detection head](https://github.com/IMvision12/kyolo/blob/9b4d2f0545430e14ed18c99bdd20d0f4771691a9/kyolo/src/kyolo/heads/detect.py)
+  and [builder correction](https://github.com/IMvision12/kyolo/commit/d7a4a336859688c9e68863c2618c5982d57609b9).
+
 ## Independent implementation of nano
 
 1. **Establish the graph.** Start with the baseline nano diagram in Wu et al.,
