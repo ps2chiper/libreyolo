@@ -14,12 +14,11 @@ by one logit per class. Evidence is recorded in ``PORT.md``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 from ..yolo9.nn import Conv, auto_pad
 

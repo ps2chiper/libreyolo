@@ -13,11 +13,9 @@ Evidence for the verified contract is recorded in ``PORT.md``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 from ..yolo9.nn import Conv
 
@@ -38,7 +36,7 @@ class PSATopology:
     key_width: int
     value_width: int
     packing: str
-    position_kernel: Optional[int]
+    position_kernel: int | None
     ffn_expansion: float
     residual: bool
 
