@@ -127,7 +127,7 @@ A synthetic decoder check follows from those contracts. At stride 8, column
 class logit gives probability 0.5. To detect swapped sides, also test four
 distributions concentrated at distinct bins.
 
-**Attention and tower provenance still open.** TensorRTx has an MIT repository
+**Attention and detection tower observations.** TensorRTx has an MIT repository
 license and a concrete nano builder. Its YOLO11 instructions identify a
 specific Ultralytics release as training code, and its builders include
 Python-style expressions alongside the C++ graph. This establishes the
@@ -150,6 +150,58 @@ and [LibreYOLO contribution policy](../../../CONTRIBUTING.md).
   pointwise outputs of width 80, followed by a 1 × 1 class-logit output.
   The builder repeats the tower pattern at all three scales. The COCO class
   width is specific to that configuration. [Detection builder](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/yolo11/src/model.cpp#L238-L315).
+
+### TensorRTx source history and port decision
+
+Keep both towers pending independent implementation. The TensorRTx root carried
+MIT at both YOLO11 introductions. The original changes contain direct textual
+links to AGPL-licensed source in the affected functions. Under LibreYOLO's
+provenance policy, TensorRTx therefore cannot establish an independent source
+for porting either tower. The evidence below concerns these particular files.
+[2024 license](https://github.com/wang-xinyu/tensorrtx/blob/4f79443dd2e23547457063d614e8eda868667cf7/LICENSE),
+[2025 license](https://github.com/wang-xinyu/tensorrtx/blob/de7ad561bc23c9d1521337e2b9f330410b77f17e/LICENSE)
+and [contribution policy](../../../CONTRIBUTING.md).
+
+- **Attention predates YOLO11.** The earliest matching TensorRTx PR commit
+  located was mpj1234's YOLOv10 TensorRT 10 implementation on July 24, 2024
+  (`070c81a`), followed by the TensorRT 8 version on July 26 (`1b86af0`).
+  The October YOLO11 TensorRT 8 attention function retains the July TensorRT 8
+  function body, including its comments. Two of those comments reproduce
+  Python expressions from THU-MIG's YOLOv10 v1.1 attention implementation:
+  the positional convolution declaration and the value aggregation plus
+  positional addition. THU-MIG's license at that revision is AGPL-3.0.
+  This traces the inner attention function; it does not establish the origin
+  of every line of the enclosing C2PSA block.
+  [July 24 commit](https://github.com/wang-xinyu/tensorrtx/commit/070c81ae9ecc5e8b47aeda745936f6cc99de7a42),
+  [July 26 commit](https://github.com/wang-xinyu/tensorrtx/commit/1b86af028da36ccf684053a9cdde5f532e82a013),
+  [original YOLO11 attention](https://github.com/wang-xinyu/tensorrtx/blob/4f79443dd2e23547457063d614e8eda868667cf7/yolo11/src/block.cpp#L281-L344),
+  [THU-MIG attention](https://github.com/THU-MIG/yolov10/blob/799ff3be47d21173bcf29b351820d4b8e955e0fe/ultralytics/nn/modules/block.py#L783-L796)
+  and [historical license](https://github.com/THU-MIG/yolov10/blob/799ff3be47d21173bcf29b351820d4b8e955e0fe/LICENSE).
+
+- **YOLO11 detection towers first appear on October 11, 2024.** In PR
+  #1584, mpj1234's first commit (`e78ab62`) added the TensorRT 8 builders.
+  The second (`9ca5b46`) added the training-code link. The merged commit was
+  `4f79443`. The comment directly above the C++ box- and class-width
+  calculations matches the complete Python assignment in Ultralytics v8.3.0
+  Detect, including its trailing comment. The original README names that
+  release, whose license was AGPL-3.0. The matched text provides stronger
+  evidence of source contact than checkpoint compatibility alone.
+  [Original PR and commits](https://github.com/wang-xinyu/tensorrtx/pull/1584/commits),
+  [merged detection builder](https://github.com/wang-xinyu/tensorrtx/blob/4f79443dd2e23547457063d614e8eda868667cf7/yolo11/src/model.cpp#L237-L262),
+  [original README](https://github.com/wang-xinyu/tensorrtx/blob/4f79443dd2e23547457063d614e8eda868667cf7/yolo11/readme.md),
+  [upstream Detect](https://github.com/ultralytics/ultralytics/blob/6e43d1e1e5db72afbf686dee6745669bcb124b0a/ultralytics/nn/modules/head.py#L40)
+  and [historical license](https://github.com/ultralytics/ultralytics/blob/6e43d1e1e5db72afbf686dee6745669bcb124b0a/LICENSE).
+
+- **The later TensorRT 10 port preserves both matches.** PR #1681 introduced
+  the port in `2946b95` on December 20, 2025 (UTC), followed by formatting
+  in `8306147` and the merged commit `de7ad56`. Its author names Ultralytics
+  v8.3.238. Neither YOLO11 PR records an independent implementation process
+  or a separate grant for the matched material. The public history establishes
+  source contact and reuse across ports. It cannot determine how the author
+  wrote each remaining TensorRT operation.
+  [PR #1681](https://github.com/wang-xinyu/tensorrtx/pull/1681),
+  [attention at merge](https://github.com/wang-xinyu/tensorrtx/blob/de7ad561bc23c9d1521337e2b9f330410b77f17e/yolo11/src/block.cpp#L337-L355)
+  and [detection at merge](https://github.com/wang-xinyu/tensorrtx/blob/de7ad561bc23c9d1521337e2b9f330410b77f17e/yolo11/src/model.cpp#L238-L262).
 
 ## Independent implementation of nano
 
