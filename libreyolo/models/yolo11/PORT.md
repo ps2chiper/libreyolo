@@ -83,7 +83,7 @@ at each level, with two convolution stages drawn in each tower. At each site
 the raw output has four distributions of `reg_max` logits and one logit per
 class. Zhang et al. describe depthwise and pointwise convolution in the
 baseline Detect module. Exact assignment of those operators to layers, tower
-widths, bin count, grid origin and decoding order still need source support.
+widths, bin count, grid origin and decoding order are unspecified in these papers.
 Keep the raw tower contract distinct from the decoded adapter contract below.
 [Feng et al., baseline Figure 1](https://doi.org/10.3390/fire9110478)
 and [Zhang et al., YOLO11n architecture](https://doi.org/10.1007/s44443-025-00116-0).
@@ -92,6 +92,62 @@ These additional papers publish their architectural descriptions under
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The notes summarize
 the authors' descriptions in new wording. The article licenses cover the
 papers; code and checkpoint provenance require separate evidence.
+
+## Implementation evidence for the nano head and decoder
+
+**Decoder.** Tencent's ncnn YOLO11 example carries a file-level BSD-3-Clause
+notice. Its CPU postprocessor consumes a raw row per prediction site, in
+row-major grid order. The first 64 logits are four contiguous groups of 16,
+ordered left, top, right, bottom. For each group it takes a softmax over bins
+0 through 15 and computes the probability-weighted mean bin index. At grid
+column x and row y, the center in grid units is (x + 0.5, y + 0.5).
+Subtract the left and top means and add the right and bottom means, then
+multiply by the level stride to get pixel-space xyxy on the input canvas.
+Class logits follow the 64 box logits. The example selects the highest class
+and applies sigmoid, without an objectness multiplier. LibreYOLO's adapter
+needs all class probabilities, so retain the per-class sigmoid scores before
+filtering. [ncnn decoder](https://github.com/Tencent/ncnn/blob/71f731859876c6da4195949a85a9c0b188304705/examples/yolo11.cpp#L186-L281)
+and [license](https://github.com/Tencent/ncnn/blob/71f731859876c6da4195949a85a9c0b188304705/LICENSE.txt).
+
+Hailo's nano-specific COCO configuration corroborates 16 regression bins,
+80 classes, separate box and class outputs at strides 8, 16 and 32, and
+sigmoid on all three class outputs. Its configuration repository is MIT.
+Its network manifest identifies the upstream model as AGPL-3.0. These
+references establish the output contract for an independently trained model.
+[Nano decoder configuration](https://github.com/hailo-ai/hailo_model_zoo/blob/888f366800dcbd5be7c188a04e56480bba75e9a7/hailo_model_zoo/cfg/postprocess_config/yolov11n_nms_config.json),
+[activation configuration](https://github.com/hailo-ai/hailo_model_zoo/blob/888f366800dcbd5be7c188a04e56480bba75e9a7/hailo_model_zoo/cfg/alls/generic/yolov11n.alls),
+[network manifest](https://github.com/hailo-ai/hailo_model_zoo/blob/888f366800dcbd5be7c188a04e56480bba75e9a7/hailo_model_zoo/cfg/networks/yolov11n.yaml)
+and [license](https://github.com/hailo-ai/hailo_model_zoo/blob/888f366800dcbd5be7c188a04e56480bba75e9a7/LICENSE).
+
+A synthetic decoder check follows from those contracts. At stride 8, column
+10 and row 20, equal logits within each group give four mean distances of
+7.5 cells. The pre-clipping box is (24, 104, 144, 224) in pixels. A zero
+class logit gives probability 0.5. To detect swapped sides, also test four
+distributions concentrated at distinct bins.
+
+**Attention and tower provenance still open.** TensorRTx has an MIT repository
+license and a concrete nano builder. Its YOLO11 instructions identify a
+specific Ultralytics release as training code, and its builders include
+Python-style expressions alongside the C++ graph. This establishes the
+behavior of that port. I could not verify independent authorship of the
+corresponding graph logic under LibreYOLO's contribution policy. The
+following observations are for provenance review before implementation.
+[TensorRTx license](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/LICENSE),
+[YOLO11 instructions](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/yolo11/readme.md)
+and [LibreYOLO contribution policy](../../../CONTRIBUTING.md).
+
+- For nano, its 256-channel stage sends 128 channels through attention.
+  Two heads each use 32 query, 32 key and 64 value channels. Its positional
+  path applies a 3 × 3 depthwise convolution to the spatial value tensor
+  before addition and a 1 × 1 projection. [Nano preset](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/yolo11/yolo11_det.cpp#L127-L140),
+  [stage](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/yolo11/src/model.cpp#L186-L191)
+  and [attention builder](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/yolo11/src/block.cpp#L293-L404).
+- For the 80-class nano detector, its box tower has two 3 × 3
+  convolution/BN/SiLU stages of width 64 and a 1 × 1 output of width 64.
+  Its class tower uses two 3 × 3 depthwise and 1 × 1 pointwise pairs, with
+  pointwise outputs of width 80, followed by a 1 × 1 class-logit output.
+  The builder repeats the tower pattern at all three scales. The COCO class
+  width is specific to that configuration. [Detection builder](https://github.com/wang-xinyu/tensorrtx/blob/89db56262a761f6ac63544634757cd949b756ee3/yolo11/src/model.cpp#L238-L315).
 
 ## Independent implementation of nano
 
