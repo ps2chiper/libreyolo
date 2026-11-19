@@ -285,6 +285,49 @@ def test_singleton_level_is_rejected_when_batch_norm_mixes_modes():
     _assert_buffers_unchanged(head, before)
 
 
+def test_sync_batch_norm_singleton_is_rejected_without_active_sync():
+    head = torch.nn.SyncBatchNorm.convert_sync_batchnorm(
+        YOLO11Head(3, NANO_LEVELS, TOPO)
+    ).train()
+    before = _snapshot_buffers(head)
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 1, 1),
+    ]
+    with pytest.raises(ValueError, match="more than one value"):
+        head(levels)
+    _assert_buffers_unchanged(head, before)
+
+
+def test_sync_batch_norm_allows_local_singleton_when_sync_is_active(monkeypatch):
+    head = torch.nn.SyncBatchNorm.convert_sync_batchnorm(
+        YOLO11Head(3, NANO_LEVELS, TOPO)
+    ).train()
+    monkeypatch.setattr(head, "_sync_world_size", lambda module: 2)
+    assert head._uses_batch_statistics(2) is False
+
+
+def test_track_running_stats_disabled_eval_uses_existing_buffers():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).eval()
+    for module in head.modules():
+        if isinstance(module, torch.nn.BatchNorm2d):
+            assert module.running_mean is not None
+            module.track_running_stats = False
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 1, 1),
+    ]
+    with torch.no_grad():
+        raw = head(levels)
+    assert [tuple(level.shape) for level in raw] == [
+        (1, 67, 4, 4),
+        (1, 67, 2, 2),
+        (1, 67, 1, 1),
+    ]
+
+
 def test_two_stage_structure_is_explicit():
     head = YOLO11Head(3, NANO_LEVELS, TOPO)
     assert len(head.box_towers[0]) == 3

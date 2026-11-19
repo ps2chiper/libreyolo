@@ -383,15 +383,16 @@ evidence.
   stage orders, box groups of 4 with 5x5 kernels and 3x3 pointwise and output
   projections, mixed batch and dtype rejection, and that wrong channels and
     empty spatial dimensions are rejected before any tower runs. A singleton
-    level is rejected only when that level's BatchNorm layers use batch
-    statistics, so a frozen-BatchNorm training head and an evaluation head
-    accept it while a mixed-mode head rejects it.
+    level is rejected only when that level's BatchNorm layers would normalize
+    with local batch statistics. The check follows each layer's mode and running
+    buffers and covers SyncBatchNorm, where a local singleton is allowed only
+    when the process group spans more than one rank.
   - `tests/unit/test_yolo11_presets.py` checks the preset name and version,
     builds it through `build_experimental_nano`, runs stage 10, and decodes the
     raw maps at 640.
   - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
     unchanged.
-  - `pytest tests/unit/test_yolo11_*.py`: 40 passed.
+  - `pytest tests/unit/test_yolo11_*.py`: 43 passed.
 
 ## Paper references
 

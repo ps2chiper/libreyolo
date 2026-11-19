@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from numbers import Integral
 
 import torch
+import torch.distributed as dist
 from torch import Tensor, nn
 
 from ..yolo9.nn import Conv, auto_pad
@@ -191,13 +192,33 @@ class YOLO11Head(nn.Module):
             ),
         )
 
+    @staticmethod
+    def _sync_world_size(module) -> int:
+        """World size for this layer's process group, or 1 when sync is off."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return 1
+        try:
+            return dist.get_world_size(getattr(module, "process_group", None))
+        except (RuntimeError, ValueError):
+            return 1
+
+    def _batch_norm_needs_batch_statistics(self, module) -> bool:
+        """Whether this layer normalizes with local batch statistics."""
+        if module.training:
+            is_synchronized = (
+                isinstance(module, nn.SyncBatchNorm)
+                and self._sync_world_size(module) > 1
+            )
+            return not is_synchronized
+        return module.running_mean is None and module.running_var is None
+
     def _uses_batch_statistics(self, level: int) -> bool:
-        """Whether any BatchNorm in this level's towers needs batch statistics."""
+        """Whether any BatchNorm in this level's towers needs local batch statistics."""
         for tower in (self.box_towers[level], self.class_towers[level]):
             for module in tower.modules():
-                if isinstance(module, nn.BatchNorm2d) and (
-                    module.training or not module.track_running_stats
-                ):
+                if isinstance(
+                    module, (nn.BatchNorm2d, nn.SyncBatchNorm)
+                ) and self._batch_norm_needs_batch_statistics(module):
                     return True
         return False
 
