@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 from libreyolo import LibreYOLO, LibreYOLO11Experimental
 from libreyolo.models.yolo11.config import ExperimentalNanoConfig
 from libreyolo.models.yolo11.trainer import ExperimentalNanoTrainer
+from libreyolo.utils.serialization import load_trusted_torch_file
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +60,9 @@ def test_train_validate_and_reload_synthetic_dataset(tmp_path, imgsz, device):
 
     class CaptureInitialWeight:
         def on_train_start(self, event):
+            for tower in model.model.head.class_towers:
+                bias = tower[-1].bias
+                assert torch.equal(bias, torch.full_like(bias, math.log(0.01 / 0.99)))
             self.weight = model.model.stem[0].conv.weight.detach().clone()
             if use_amp:
                 def check_activation(module, args, output):
@@ -92,3 +96,32 @@ def test_train_validate_and_reload_synthetic_dataset(tmp_path, imgsz, device):
     )
     assert 0 <= metrics["metrics/mAP50"] <= 1
     assert 0 <= metrics["metrics/mAP50-95"] <= 1
+
+    checkpoint = load_trusted_torch_file(
+        run["last_checkpoint"], map_location="cpu", context="bias round-trip test"
+    )
+    keys = [
+        f"head.class_towers.{level}.{len(tower) - 1}.bias"
+        for level, tower in enumerate(restored.model.head.class_towers)
+    ]
+    for key in keys:
+        saved = checkpoint["model"][key]
+        assert torch.equal(restored.model.state_dict()[key].cpu(), saved)
+        assert not torch.equal(saved, torch.full_like(saved, math.log(0.01 / 0.99)))
+
+    class CheckResume:
+        def on_train_start(self, event):
+            assert event.start_epoch == 2
+            for key in keys:
+                learned = checkpoint["train_model"][key]
+                assert not torch.equal(learned, torch.full_like(learned, math.log(0.01 / 0.99)))
+                assert torch.equal(restored.model.state_dict()[key].cpu(), learned)
+
+    continued = restored.train(
+        data=str(data), resume=True, epochs=2, batch=2, imgsz=imgsz,
+        device=device, workers=0, amp=use_amp, warmup_epochs=0,
+        mosaic_prob=0.0, eval_interval=0, project=str(tmp_path / "runs"),
+        name="continued", callbacks=[CheckResume()],
+    )
+    assert len(continued["epoch_loss_items"]) == 1
+    assert math.isfinite(continued["final_loss"])

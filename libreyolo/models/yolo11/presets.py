@@ -10,7 +10,10 @@ order, and class-width rule remain open evidence questions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import log
 from numbers import Integral
+
+from torch import nn
 
 from .attention import C2PSA, PSATopology
 from .detect import TowerTopology, YOLO11Head
@@ -49,8 +52,13 @@ class YOLO11NPreset:
         )
 
     def build_head(self, num_classes: int) -> YOLO11Head:
-        """Build the raw detection head for ``num_classes``."""
-        return YOLO11Head(num_classes, self.level_channels, self.towers)
+        """Build a fresh detection head with a 1% per-class foreground prior."""
+        head = YOLO11Head(num_classes, self.level_channels, self.towers)
+        for tower in head.class_towers:
+            bias = tower[-1].bias
+            if bias is not None:
+                nn.init.constant_(bias, log(0.01 / 0.99))
+        return head
 
 
 EXPERIMENTAL_NANO = YOLO11NPreset(

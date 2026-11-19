@@ -43,6 +43,12 @@ before applying the weights. Prediction rounds `imgsz` up to a multiple of 32.
 Pass a LibreYOLO detection dataset YAML with training and validation splits
 and class names. The wrapper configures the classification head for the dataset.
 
+Fresh nano heads initialize the classification output biases at P3, P4 and P5
+to `log(0.01 / 0.99)`. This gives each class a 1% sigmoid probability when
+the input contribution to its logit is zero. This is a LibreYOLO scratch-training
+choice. Checkpoint loading restores the saved inference weights. Resuming an EMA
+checkpoint restores the saved live training weights for the next optimizer step.
+
 ```python
 model = LibreYOLO11Experimental()
 run = model.train(data="data.yaml", pretrained=False, epochs=10, val_loss=True)
@@ -356,7 +362,8 @@ convolution blocks (C2PSA cv1/cv2, the FFN and the tower stages) use the native
 `Conv` with BatchNorm and SiLU, except the FFN output convolution, which has no
 activation. The numerical reference test reproduces this ordering, so it
 verifies the implementation of the choice, not an external source.
-Initialization is out of scope for this interface.
+The named nano preset applies the scratch-training class bias described above
+when it constructs a head.
 
 ### Verified contract and evidence
 

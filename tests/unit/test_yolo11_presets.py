@@ -53,3 +53,6 @@ def test_preset_builders_use_the_declared_topologies():
         EXPERIMENTAL_NANO.towers.box_width
     )
     assert head.nc == 5
+    for tower in head.class_towers:
+        bias = tower[-1].bias
+        torch.testing.assert_close(bias.sigmoid(), torch.full_like(bias, 0.01))
