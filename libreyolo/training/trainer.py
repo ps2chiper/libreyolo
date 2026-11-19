@@ -95,6 +95,7 @@ RECTANGULAR_TRAINING_FAMILIES = {
     "yolo9": 32,
     "yolo9_e2e": 32,
     "yolo9_p2": 32,
+    "yolo11_experimental": 32,
     "yolox": 32,
     "yolo7": 32,
     "rtmdet": 32,

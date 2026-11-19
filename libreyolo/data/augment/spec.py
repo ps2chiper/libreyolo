@@ -82,6 +82,7 @@ FAMILY_DISPLAY_NAMES: Dict[str, str] = {
     "yolo9": "YOLOv9",
     "yolo9_e2e": "YOLOv9-E2E",
     "yolo9_p2": "YOLOv9-P2",
+    "yolo11_experimental": "Experimental YOLO11n",
     "yolonas": "YOLO-NAS",
     "rtdetr": "RT-DETR",
     "rtdetrv2": "RT-DETRv2",
@@ -219,6 +220,7 @@ FAMILY_AUG_SUPPORT: Dict[str, Dict[str, Support]] = {
     "yolo9": dict(_YOLOX_STYLE),
     "yolo9_e2e": dict(_YOLOX_STYLE),
     "yolo9_p2": dict(_YOLOX_STYLE),
+    "yolo11_experimental": dict(_YOLOX_STYLE),
     "rtmdet": {
         **_YOLOX_STYLE,
         "flipud": _i("RTMDet's transform has no vertical flip."),
@@ -364,6 +366,9 @@ FAMILY_AUG_SUPPORT: Dict[str, Dict[str, Support]] = {
 # subclass rather than the base TrainConfig. Documentation-oriented; the CLI
 # does not expose these.
 FAMILY_EXTRA_AUG_KNOBS: Dict[str, Dict[str, str]] = {
+    "yolo11_experimental": {
+        "rot90": "Random 90-degree rotation probability.",
+    },
     "yolo9": {
         "copy_paste": "Copy-paste instance augmentation probability (task='segment' only).",
         "copy_paste_mode": "Copy-paste source: 'flip' (same sample mirrored) or 'mixup' (second sample).",

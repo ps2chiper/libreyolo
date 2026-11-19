@@ -12,26 +12,19 @@ from .loss import YOLO9Loss
 from .nn import LibreYOLO9Model, YOLO9Head
 
 
-class YOLO9ValidationLoss:
-    """Evaluate YOLO9's training loss from eval-mode raw head outputs."""
+class DenseDetectionValidationLoss:
+    """Evaluate native distributional detection loss from per-level logits."""
 
-    def __init__(self, model: nn.Module, *, max_labels: int) -> None:
-        # yolo9_p2 is the same dense head with a fourth stride, so it shares
-        # this adapter; the strides below come from the head either way.
-        if not isinstance(model, LibreYOLO9Model) or type(model.head) is not YOLO9Head:
-            raise TypeError(
-                "YOLO9 validation loss supports the standard detect model only"
-            )
-
+    def __init__(self, *, num_classes, reg_max, strides, device, max_labels):
         self.max_labels = int(max_labels)
         if self.max_labels < 1:
             raise ValueError("YOLO9 validation-loss max_labels must be at least 1")
-        self.num_classes = int(model.head.num_classes)
-        self.device = next(model.parameters()).device
+        self.num_classes = int(num_classes)
+        self.device = device
         self.loss = YOLO9Loss(
             num_classes=self.num_classes,
-            reg_max=int(model.head.reg_max),
-            strides=list(model.head.strides),
+            reg_max=int(reg_max),
+            strides=list(strides),
             image_size=None,
             device=self.device,
             distributed_normalize=False,
@@ -126,4 +119,24 @@ class YOLO9ValidationLoss:
         return prepared
 
 
-__all__ = ["YOLO9ValidationLoss"]
+class YOLO9ValidationLoss(DenseDetectionValidationLoss):
+    """Evaluate YOLO9's training loss from eval-mode raw head outputs."""
+
+    def __init__(self, model: nn.Module, *, max_labels: int) -> None:
+        # yolo9_p2 is the same dense head with a fourth stride, so it shares
+        # this adapter; the strides below come from the head either way.
+        if not isinstance(model, LibreYOLO9Model) or type(model.head) is not YOLO9Head:
+            raise TypeError(
+                "YOLO9 validation loss supports the standard detect model only"
+            )
+
+        super().__init__(
+            num_classes=model.head.num_classes,
+            reg_max=model.head.reg_max,
+            strides=model.head.strides,
+            device=next(model.parameters()).device,
+            max_labels=max_labels,
+        )
+
+
+__all__ = ["DenseDetectionValidationLoss", "YOLO9ValidationLoss"]

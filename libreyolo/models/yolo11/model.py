@@ -1,4 +1,4 @@
-"""Public inference wrapper for LibreYOLO's experimental nano detector."""
+"""Public training and inference wrapper for LibreYOLO's experimental nano detector."""
 
 from functools import partial
 from pathlib import Path
@@ -7,7 +7,11 @@ from typing import ClassVar
 from ...postprocess.yolo9 import postprocess
 from ...preprocess.letterbox import LETTERBOX_CENTER
 from ...preprocess.yolo9 import preprocess_image, preprocess_numpy
+from ...training.ddp_spawn import ddp_aware
+from ...utils.image_size import imgsz_to_hw
+from ...validation.preprocessors import YOLO9ValPreprocessor
 from ..base import BaseModel
+from .config import ExperimentalNanoConfig
 from .detector import build_experimental_detector
 
 
@@ -18,6 +22,8 @@ class LibreYOLO11Experimental(BaseModel):
     FILENAME_PREFIX = "LibreYOLO11Experimental"
     INPUT_SIZES: ClassVar[dict[str, int]] = {"n": 640}
     IMGSZ_STRIDE = 32
+    TRAIN_CONFIG = ExperimentalNanoConfig
+    val_preprocessor_class = YOLO9ValPreprocessor
     LETTERBOX_PAD = LETTERBOX_CENTER
     UNPUBLISHED_WEIGHTS: ClassVar[dict[str, str]] = {
         "LibreYOLO11Experimentaln": "Initialize the experimental preset from scratch."
@@ -93,7 +99,52 @@ class LibreYOLO11Experimental(BaseModel):
         return tensor, original, size, 1.0
 
     def _forward(self, input_tensor):
-        return {"predictions": self.model(input_tensor)}
+        raw = self.model(input_tensor, return_raw=True)
+        return {"predictions": self.model.decoder(raw), "raw_outputs": raw}
+
+    def _get_val_preprocessor(self, img_size=None):
+        if getattr(self, "input_profile", None) is not None:
+            return super()._get_val_preprocessor(img_size)
+        return self.val_preprocessor_class(
+            img_size=imgsz_to_hw(self.input_size if img_size is None else img_size),
+            letterbox_pad=self.letterbox_pad,
+        )
+
+    @ddp_aware()
+    def train(self, data: str, *, device="", resume=False, seed=0, **kwargs):
+        """Train on a LibreYOLO detection dataset. Use pretrained=False for a fresh run."""
+        from ...data import load_data_config
+        from .trainer import ExperimentalNanoTrainer
+
+        dataset = load_data_config(
+            data, autodownload=True,
+            allow_scripts=kwargs.get("allow_download_scripts", False),
+        )
+        names = dataset.get("names")
+        nc = int(dataset.get("nc", len(names) if names is not None else self.nb_classes))
+        if nc != self.nb_classes:
+            self._rebuild_for_new_classes(nc)
+        if names is not None:
+            if isinstance(names, list):
+                names = dict(enumerate(names))
+            self.names = self._sanitize_names(names, nc)
+        resume_path = self._resume_checkpoint(resume) if resume else None
+        trainer = ExperimentalNanoTrainer(
+            model=self.model, wrapper_model=self, num_classes=nc, size=self.size,
+            data=dataset.get("yaml_file", data), device=device or str(self.device),
+            resume=bool(resume_path), seed=seed, **kwargs,
+        )
+        if resume_path:
+            trainer.resume_source = resume_path
+            trainer.setup()
+            trainer.resume(resume_path)
+        results = trainer.train()
+        checkpoint = results.get("best_checkpoint") or results.get("last_checkpoint")
+        if checkpoint:
+            self._load_weights(str(checkpoint))
+            self.model_path = str(checkpoint)
+        self.model.eval()
+        return results
 
     def _postprocess(self, output, conf_thres, iou_thres, original_size, max_det=300, ratio=1.0, **kwargs):
         return postprocess(

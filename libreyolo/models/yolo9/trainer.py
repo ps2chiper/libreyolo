@@ -15,7 +15,61 @@ from ...training.scheduler import LinearLRScheduler, CosineAnnealingScheduler
 from .transforms import YOLO9TrainTransform, YOLO9MosaicMixupDataset
 
 
-class YOLO9Trainer(BaseTrainer):
+class DenseDetectionRecipe:
+    """Native YOLO9-style transforms, scheduler and dense-loss reporting."""
+
+    def create_transforms(self):
+        preproc = YOLO9TrainTransform(
+            max_labels=getattr(self.config, "max_labels", 300),
+            flip_prob=self.config.flip_prob,
+            vertical_flip_prob=getattr(self.config, "flipud", 0.0),
+            hsv_prob=self.config.hsv_prob,
+            rot90_prob=getattr(self.config, "rot90", 0.0),
+            letterbox_pad=self._resolved_letterbox_pad(),
+        )
+        return preproc, YOLO9MosaicMixupDataset
+
+    def create_scheduler(self, iters_per_epoch: int):
+        scheduler_name = self.config.scheduler
+        if scheduler_name == "linear":
+            return LinearLRScheduler(
+                lr=self.effective_lr,
+                iters_per_epoch=iters_per_epoch,
+                total_epochs=self.config.epochs,
+                warmup_epochs=self.config.warmup_epochs,
+                warmup_lr_start=self.config.warmup_lr_start,
+                min_lr_ratio=self.config.min_lr_ratio,
+                warmup_momentum=getattr(self.config, "warmup_momentum", None),
+                momentum=getattr(self.config, "momentum", None),
+            )
+        elif scheduler_name in ("cos", "warmcos"):
+            return CosineAnnealingScheduler(
+                lr=self.effective_lr,
+                iters_per_epoch=iters_per_epoch,
+                total_epochs=self.config.epochs,
+                warmup_epochs=self.config.warmup_epochs,
+                warmup_lr_start=self.config.warmup_lr_start,
+                min_lr_ratio=self.config.min_lr_ratio,
+            )
+        else:
+            raise ValueError(f"Unknown scheduler: {scheduler_name}")
+
+    def get_loss_components(self, outputs: Dict) -> Dict[str, float]:
+        # Transfer every logging scalar with ONE .cpu() call (the rfdetr
+        # pattern from PR #761): a per-key ``.item()`` here would be one GPU
+        # pipeline drain each per logged step (issue #763).
+        values = {name: outputs.get(name, 0) for name in ("box", "cls", "dfl")}
+        tensor_names = [n for n, v in values.items() if isinstance(v, torch.Tensor)]
+        if tensor_names:
+            stacked = torch.stack(
+                [values[n].detach().reshape(()).float() for n in tensor_names]
+            ).cpu()
+            for i, name in enumerate(tensor_names):
+                values[name] = stacked[i]
+        return {name: float(v) for name, v in values.items()}
+
+
+class YOLO9Trainer(DenseDetectionRecipe, BaseTrainer):
     """YOLOv9-specific trainer."""
 
     artifact_model_families = ("yolo9", "yolo9_e2e")
@@ -119,17 +173,6 @@ class YOLO9Trainer(BaseTrainer):
             return pad
         return getattr(self.wrapper_model, "letterbox_pad", None)
 
-    def create_transforms(self):
-        preproc = YOLO9TrainTransform(
-            max_labels=getattr(self.config, "max_labels", 300),
-            flip_prob=self.config.flip_prob,
-            vertical_flip_prob=getattr(self.config, "flipud", 0.0),
-            hsv_prob=self.config.hsv_prob,
-            rot90_prob=getattr(self.config, "rot90", 0.0),
-            letterbox_pad=self._resolved_letterbox_pad(),
-        )
-        return preproc, YOLO9MosaicMixupDataset
-
     def _checkpoint_extra_metadata(self):
         extra = super()._checkpoint_extra_metadata()
         from libreyolo.preprocess.letterbox import normalize_letterbox_pad
@@ -188,45 +231,6 @@ class YOLO9Trainer(BaseTrainer):
                 if isinstance(state, dict):
                     checkpoint[key] = upgrade_legacy_state_dict(state)
         return checkpoint
-
-    def create_scheduler(self, iters_per_epoch: int):
-        scheduler_name = self.config.scheduler
-        if scheduler_name == "linear":
-            return LinearLRScheduler(
-                lr=self.effective_lr,
-                iters_per_epoch=iters_per_epoch,
-                total_epochs=self.config.epochs,
-                warmup_epochs=self.config.warmup_epochs,
-                warmup_lr_start=self.config.warmup_lr_start,
-                min_lr_ratio=self.config.min_lr_ratio,
-                warmup_momentum=getattr(self.config, "warmup_momentum", None),
-                momentum=getattr(self.config, "momentum", None),
-            )
-        elif scheduler_name in ("cos", "warmcos"):
-            return CosineAnnealingScheduler(
-                lr=self.effective_lr,
-                iters_per_epoch=iters_per_epoch,
-                total_epochs=self.config.epochs,
-                warmup_epochs=self.config.warmup_epochs,
-                warmup_lr_start=self.config.warmup_lr_start,
-                min_lr_ratio=self.config.min_lr_ratio,
-            )
-        else:
-            raise ValueError(f"Unknown scheduler: {scheduler_name}")
-
-    def get_loss_components(self, outputs: Dict) -> Dict[str, float]:
-        # Transfer every logging scalar with ONE .cpu() call (the rfdetr
-        # pattern from PR #761): a per-key ``.item()`` here would be one GPU
-        # pipeline drain each per logged step (issue #763).
-        values = {name: outputs.get(name, 0) for name in ("box", "cls", "dfl")}
-        tensor_names = [n for n, v in values.items() if isinstance(v, torch.Tensor)]
-        if tensor_names:
-            stacked = torch.stack(
-                [values[n].detach().reshape(()).float() for n in tensor_names]
-            ).cpu()
-            for i, name in enumerate(tensor_names):
-                values[name] = stacked[i]
-        return {name: float(v) for name, v in values.items()}
 
     def on_forward(self, imgs: torch.Tensor, targets: torch.Tensor, polygons=None) -> Dict:
         return self.model(imgs, targets=targets)

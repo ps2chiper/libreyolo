@@ -37,6 +37,7 @@ MODEL_GROUPS: dict[str, str] = {
     "tinyformer": "g1",
     "yolonas": "g1",
     # g2 - supporting trainables
+    "yolo11_experimental": "g2",
     "yolox": "g2",
     "yolo7": "g2",
     "rtmdet": "g2",
@@ -60,7 +61,6 @@ MODEL_GROUPS: dict[str, str] = {
     # s - sibling / zero-shot APIs covered separately
     "pe": "s",
     # g3 - inference-only specialists
-    "yolo11_experimental": "g3",
     "levjepa": "g3",
     "lwdetr": "g3",
     "riodetrv2": "g3",

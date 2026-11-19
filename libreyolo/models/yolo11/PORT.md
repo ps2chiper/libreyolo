@@ -37,7 +37,26 @@ result = restored.predict("photo.jpg")
 Public checkpoints record the class names, class count, preset name, preset
 version and centered letterbox geometry. Loading checks the preset identity
 before applying the weights. Prediction rounds `imgsz` up to a multiple of 32.
-Training, dataset validation and export integration are separate milestones.
+
+## Scratch training and dataset validation
+
+Pass a LibreYOLO detection dataset YAML with training and validation splits
+and class names. The wrapper configures the classification head for the dataset.
+
+```python
+model = LibreYOLO11Experimental()
+run = model.train(data="data.yaml", pretrained=False, epochs=10, val_loss=True)
+restored = LibreYOLO(run["last_checkpoint"])
+metrics = restored.val(data="data.yaml")
+```
+
+The trainer passes the three raw feature maps to LibreYOLO's native task-aligned
+assignment and box, classification and distribution focal losses. Validation uses
+the preset's centered letterbox and decoder for detection metrics. Setting
+`val_loss=True` adds per-component losses during training-time validation.
+The CPU smoke test trains for one epoch on four synthetic images, reloads the
+checkpoint and runs standalone validation on two held-out images. Export
+integration and real-dataset accuracy evaluation remain open.
 
 ## Published scale presets
 

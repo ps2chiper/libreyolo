@@ -305,9 +305,10 @@ class YOLO11Detector(nn.Module):
         )
         return self.head(self._run_features(images))
 
-    def forward(self, images: Tensor) -> Tensor:
-        """Return canvas-pixel xyxy boxes and class probabilities."""
-        return self.decoder(self.forward_raw(images))
+    def forward(self, images: Tensor, *, return_raw: bool = False):
+        """Return decoded predictions, or per-level logits for the native loss."""
+        raw = self.forward_raw(images)
+        return raw if return_raw else self.decoder(raw)
 
 
 def build_experimental_detector(

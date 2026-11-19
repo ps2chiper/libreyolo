@@ -91,19 +91,21 @@ def test_spec_families_have_display_names():
 
 
 def test_extra_knobs_exist_on_family_configs():
+    from libreyolo.models.yolo9_e2e.config import YOLO9E2EConfig
+    from libreyolo.models.yolo9_p2.config import YOLO9P2Config
+    from libreyolo.models.yolo11.config import ExperimentalNanoConfig
     from libreyolo.training.config import (
         DFINEConfig,
         ECConfig,
         YOLO9Config,
         YOLONASConfig,
     )
-    from libreyolo.models.yolo9_e2e.config import YOLO9E2EConfig
-    from libreyolo.models.yolo9_p2.config import YOLO9P2Config
 
     config_classes = {
         "yolo9": YOLO9Config,
         "yolo9_e2e": YOLO9E2EConfig,
         "yolo9_p2": YOLO9P2Config,
+        "yolo11_experimental": ExperimentalNanoConfig,
         "dfine": DFINEConfig,
         "yolonas": YOLONASConfig,
     }
