@@ -56,6 +56,21 @@ def test_rectangular_image_keeps_level_order_and_stride(detector):
     assert tuple(decoded.shape) == (1, 7, 4200)
 
 
+def test_forward_entry_point_matches_the_explicit_path(detector):
+    images = torch.randn(1, 3, 64, 64)
+    with torch.no_grad():
+        raw = detector.forward_raw(images)
+        decoded = detector(images)
+
+    assert [tuple(level.shape) for level in raw] == [
+        (1, 67, 8, 8),
+        (1, 67, 4, 4),
+        (1, 67, 2, 2),
+    ]
+    assert tuple(decoded.shape) == (1, 7, 84)
+    torch.testing.assert_close(decoded, detector.decoder(raw))
+
+
 @pytest.mark.parametrize(
     ("shape", "message"),
     [
