@@ -67,10 +67,18 @@ class LibreYOLO11Experimental(BaseModel):
     def _validate_loaded_state_dict_for_task(self, state_dict, checkpoint=None):
         if checkpoint is not None and "model_family" in checkpoint:
             for key, expected in self._save_extra_metadata().items():
-                if checkpoint.get(key) != expected:
+                if key not in checkpoint:
+                    if key == "letterbox_pad":
+                        # Checkpoints saved before letterbox metadata used the
+                        # same centered geometry.
+                        continue
+                    actual = None
+                else:
+                    actual = checkpoint[key]
+                if actual != expected:
                     raise ValueError(
                         f"Unsupported experimental checkpoint {key}: "
-                        f"expected {expected!r}, got {checkpoint.get(key)!r}"
+                        f"expected {expected!r}, got {actual!r}"
                     )
 
     @staticmethod

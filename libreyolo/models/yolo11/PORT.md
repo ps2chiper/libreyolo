@@ -461,7 +461,12 @@ maps and `forward` returns decoded detections.
   as needing batch statistics and is rejected before the stem with zero buffer
   changes. A feature-only call with a training head remains valid, while
   `forward_raw` checks that training head before the stem.
-- `pytest tests/unit/test_yolo11_*.py`: 63 passed.
+- `tests/unit/test_yolo11_public_api.py` checks public prediction and a
+  save/reload round trip, exact restored weights and predictions, preset metadata
+  validation, backward compatibility for checkpoints saved before
+  `letterbox_pad` was recorded, rejection of an explicit conflicting pad, stride
+  rounding, and mixed-aspect batch inference.
+- `pytest tests/unit/test_yolo11_*.py`: 67 passed.
 
 With two Gloo ranks and one P5 value per channel on each rank, the CPU device
 check rejects distributed SyncBatchNorm training before any tower updates its

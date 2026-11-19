@@ -39,6 +39,25 @@ def test_public_prediction_and_checkpoint_round_trip(tmp_path):
         LibreYOLO(str(path), device="cpu")
 
 
+def test_checkpoint_letterbox_metadata_backward_compatibility(tmp_path):
+    model = LibreYOLO11Experimental(nb_classes=3, device="cpu")
+    path = tmp_path / "legacy.pt"
+    model.save(str(path))
+
+    checkpoint = torch.load(path, weights_only=True)
+    del checkpoint["letterbox_pad"]
+    torch.save(checkpoint, path)
+    restored = LibreYOLO(str(path), device="cpu")
+    assert type(restored) is LibreYOLO11Experimental
+    assert restored.letterbox_pad == "center"
+
+    checkpoint = torch.load(path, weights_only=True)
+    checkpoint["letterbox_pad"] = "topleft"
+    torch.save(checkpoint, path)
+    with pytest.raises(RuntimeError, match="letterbox_pad"):
+        LibreYOLO(str(path), device="cpu")
+
+
 def test_public_prediction_rounds_input_to_stride():
     model = LibreYOLO11Experimental(nb_classes=2, device="cpu")
     image = Image.fromarray(np.zeros((48, 80, 3), dtype=np.uint8))
