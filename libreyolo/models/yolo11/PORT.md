@@ -401,7 +401,8 @@ names the operators without expanding them:
 | SPPF | Half-width 1x1, three serial 5x5 max pools, concat, 1x1 projection | Kernel from line 19; arrangement experimental |
 | Upsampling | Nearest neighbour, scale 2 | Scale from lines 23 and 27; mode experimental |
 | Attention repeats | Preset value 1 | A1 illustrates `n=2`; the repeat count remains open |
-| Input geometry | Height and width must be multiples of 32 | Design constraint for exact level shapes |
+| Input geometry | Positive batch, positive height and width, both multiples of 32 | Design constraint for exact level shapes |
+| Singleton training | Rejected before the stem when a P5 normalization layer would use local batch statistics | Mode-aware preflight; frozen P5 layers and evaluation mode remain supported |
 
 `build_experimental_detector(num_classes)` is the public entry point.
 `forward_features` returns the three neck maps, `forward_raw` returns the head
@@ -435,9 +436,13 @@ maps and `forward` returns decoded detections.
   maps and (2, 7, 8400) detections. A 320x640 pass produces 40x80, 20x40 and
   10x20 maps and (1, 7, 4200) detections. A 64x64 pass checks the public
   `forward` and `forward_raw` entry points against the explicit head and decoder
-  path, and backpropagation reaches every backbone, neck and head stage. The
-  file also checks malformed image rejection and builder type checks.
-- `pytest tests/unit/test_yolo11_*.py`: 53 passed.
+  path, and backpropagation reaches every backbone, neck and head stage,
+  including all six prediction towers. Empty batches and non-positive spatial
+  sizes are rejected before the stem. A training singleton at 32x32 is rejected
+  before the backbone with zero buffer changes; a 32x64 training input, a
+  singleton with frozen P5 normalization, and a singleton in evaluation remain
+  valid.
+- `pytest tests/unit/test_yolo11_*.py`: 60 passed.
 
 With two Gloo ranks and one P5 value per channel on each rank, the CPU device
 check rejects distributed SyncBatchNorm training before any tower updates its
