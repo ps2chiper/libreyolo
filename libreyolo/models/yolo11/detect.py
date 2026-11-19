@@ -203,7 +203,13 @@ class YOLO11Head(nn.Module):
             return 1
 
     def _batch_norm_needs_batch_statistics(self, module) -> bool:
-        """Whether this layer normalizes with local batch statistics."""
+        """Whether this layer normalizes with local batch statistics.
+
+        A SyncBatchNorm layer counts as synchronized only when its process
+        group spans more than one rank. That allowance assumes the input device
+        supports synchronized BatchNorm; CPU-only PyTorch builds reject
+        SyncBatchNorm inputs before any statistics are synchronized.
+        """
         if module.training:
             is_synchronized = (
                 isinstance(module, nn.SyncBatchNorm)

@@ -382,17 +382,22 @@ evidence.
   320x640 canvas, box-first channel order, output bias on and off, both class
   stage orders, box groups of 4 with 5x5 kernels and 3x3 pointwise and output
   projections, mixed batch and dtype rejection, and that wrong channels and
-    empty spatial dimensions are rejected before any tower runs. A singleton
-    level is rejected only when that level's BatchNorm layers would normalize
-    with local batch statistics. The check follows each layer's mode and running
-    buffers and covers SyncBatchNorm, where a local singleton is allowed only
-    when the process group spans more than one rank.
-  - `tests/unit/test_yolo11_presets.py` checks the preset name and version,
-    builds it through `build_experimental_nano`, runs stage 10, and decodes the
-    raw maps at 640.
-  - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
-    unchanged.
-  - `pytest tests/unit/test_yolo11_*.py`: 43 passed.
+  empty spatial dimensions are rejected before any tower runs. A singleton
+  level is rejected only when that level's BatchNorm layers would normalize
+  with local batch statistics. The check follows each layer's mode and running
+  buffers and covers SyncBatchNorm, where a local singleton is allowed only
+  when the process group spans more than one rank.
+- `tests/unit/test_yolo11_presets.py` checks the preset name and version,
+  builds it through `build_experimental_nano`, runs stage 10, and decodes the
+  raw maps at 640.
+- The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
+  unchanged.
+- `pytest tests/unit/test_yolo11_*.py`: 43 passed.
+
+The SyncBatchNorm path was probed with two Gloo ranks: the guard allowed the
+global two-sample singleton, but this CPU-only PyTorch build rejects
+SyncBatchNorm inputs before synchronization. Output and running-buffer
+equivalence still needs a two-rank accelerator check.
 
 ## Paper references
 
