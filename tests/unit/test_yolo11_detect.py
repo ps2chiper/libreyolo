@@ -195,6 +195,59 @@ def test_rejected_late_level_leaves_batch_norm_statistics_unchanged():
     )
 
 
+def _snapshot_buffers(module):
+    return {
+        name: buffer.detach().clone() for name, buffer in module.named_buffers()
+    }
+
+
+def _assert_buffers_unchanged(module, before):
+    for name, buffer in module.named_buffers():
+        torch.testing.assert_close(buffer, before[name], rtol=0, atol=0)
+
+
+def test_singleton_training_level_is_rejected_before_any_tower():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).train()
+    before = _snapshot_buffers(head)
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 1, 1),
+    ]
+    with pytest.raises(ValueError, match="more than one value"):
+        head(levels)
+    _assert_buffers_unchanged(head, before)
+
+
+def test_empty_spatial_level_is_rejected_before_any_tower():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).train()
+    before = _snapshot_buffers(head)
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 0, 20),
+    ]
+    with pytest.raises(ValueError, match="height and width"):
+        head(levels)
+    _assert_buffers_unchanged(head, before)
+
+
+def test_singleton_level_works_in_evaluation_mode():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).eval()
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 1, 1),
+    ]
+    with torch.no_grad():
+        raw = head(levels)
+    assert [tuple(level.shape) for level in raw] == [
+        (1, 67, 4, 4),
+        (1, 67, 2, 2),
+        (1, 67, 1, 1),
+    ]
+
+
 def test_two_stage_structure_is_explicit():
     head = YOLO11Head(3, NANO_LEVELS, TOPO)
     assert len(head.box_towers[0]) == 3

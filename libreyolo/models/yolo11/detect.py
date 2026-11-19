@@ -208,6 +208,19 @@ class YOLO11Head(nn.Module):
                 )
             if not level.is_floating_point():
                 raise ValueError("Feature levels must be floating point")
+            if level.shape[0] <= 0:
+                raise ValueError("Feature levels need a positive batch size")
+            if level.shape[2] <= 0 or level.shape[3] <= 0:
+                raise ValueError(
+                    "Feature levels need positive height and width"
+                )
+            if self.training and (
+                level.shape[0] * level.shape[2] * level.shape[3] <= 1
+            ):
+                raise ValueError(
+                    "Training needs more than one value per channel for "
+                    "BatchNorm; use evaluation mode for a singleton level"
+                )
             if index == 0:
                 batch = level.shape[0]
                 dtype = level.dtype
