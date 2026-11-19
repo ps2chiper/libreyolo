@@ -248,6 +248,43 @@ def test_singleton_level_works_in_evaluation_mode():
     ]
 
 
+def test_singleton_level_is_allowed_when_batch_norm_is_frozen():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).train()
+    for module in head.modules():
+        if isinstance(module, torch.nn.BatchNorm2d):
+            module.eval()
+    before = _snapshot_buffers(head)
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 1, 1),
+    ]
+    raw = head(levels)
+    assert [tuple(level.shape) for level in raw] == [
+        (1, 67, 4, 4),
+        (1, 67, 2, 2),
+        (1, 67, 1, 1),
+    ]
+    _assert_buffers_unchanged(head, before)
+
+
+def test_singleton_level_is_rejected_when_batch_norm_mixes_modes():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).eval()
+    for tower in (head.box_towers[0], head.box_towers[2]):
+        for module in tower.modules():
+            if isinstance(module, torch.nn.BatchNorm2d):
+                module.train()
+    before = _snapshot_buffers(head)
+    levels = [
+        torch.randn(1, 64, 4, 4),
+        torch.randn(1, 128, 2, 2),
+        torch.randn(1, 256, 1, 1),
+    ]
+    with pytest.raises(ValueError, match="more than one value"):
+        head(levels)
+    _assert_buffers_unchanged(head, before)
+
+
 def test_two_stage_structure_is_explicit():
     head = YOLO11Head(3, NANO_LEVELS, TOPO)
     assert len(head.box_towers[0]) == 3

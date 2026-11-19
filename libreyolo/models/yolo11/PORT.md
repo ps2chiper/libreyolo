@@ -381,15 +381,17 @@ evidence.
   C=80 with batch 2 at 640, decoded level order and strides, a rectangular
   320x640 canvas, box-first channel order, output bias on and off, both class
   stage orders, box groups of 4 with 5x5 kernels and 3x3 pointwise and output
-  projections, mixed batch and dtype rejection, and that wrong channels,
-    empty spatial dimensions and singleton training levels are rejected before
-    any tower runs, while a singleton level works in evaluation mode.
+  projections, mixed batch and dtype rejection, and that wrong channels and
+    empty spatial dimensions are rejected before any tower runs. A singleton
+    level is rejected only when that level's BatchNorm layers use batch
+    statistics, so a frozen-BatchNorm training head and an evaluation head
+    accept it while a mixed-mode head rejects it.
   - `tests/unit/test_yolo11_presets.py` checks the preset name and version,
     builds it through `build_experimental_nano`, runs stage 10, and decodes the
     raw maps at 640.
   - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
     unchanged.
-  - `pytest tests/unit/test_yolo11_*.py`: 38 passed.
+  - `pytest tests/unit/test_yolo11_*.py`: 40 passed.
 
 ## Paper references
 

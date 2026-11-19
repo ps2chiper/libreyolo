@@ -191,8 +191,23 @@ class YOLO11Head(nn.Module):
             ),
         )
 
+    def _uses_batch_statistics(self, level: int) -> bool:
+        """Whether any BatchNorm in this level's towers needs batch statistics."""
+        for tower in (self.box_towers[level], self.class_towers[level]):
+            for module in tower.modules():
+                if isinstance(module, nn.BatchNorm2d) and (
+                    module.training or not module.track_running_stats
+                ):
+                    return True
+        return False
+
     def forward(self, features: Sequence[Tensor]) -> list[Tensor]:
-        """Return one raw ``(B, 4 * reg_max + nc, H, W)`` map per level."""
+        """Return one raw ``(B, 64 + nc, H, W)`` map per level.
+
+        All levels are validated before any tower runs. A singleton level
+        (``N*H*W <= 1``) is accepted only when that level's BatchNorm layers
+        use running statistics.
+        """
         if len(features) != self.nl:
             raise ValueError(
                 f"Expected {self.nl} feature levels, got {len(features)}"
@@ -214,12 +229,12 @@ class YOLO11Head(nn.Module):
                 raise ValueError(
                     "Feature levels need positive height and width"
                 )
-            if self.training and (
+            if self._uses_batch_statistics(index) and (
                 level.shape[0] * level.shape[2] * level.shape[3] <= 1
             ):
                 raise ValueError(
-                    "Training needs more than one value per channel for "
-                    "BatchNorm; use evaluation mode for a singleton level"
+                    "BatchNorm with batch statistics needs more than one value "
+                    "per channel; freeze this level's BatchNorm or use a larger map"
                 )
             if index == 0:
                 batch = level.shape[0]
