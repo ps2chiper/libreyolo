@@ -99,7 +99,11 @@ class PSAAttention(nn.Module):
     query, key and value for each head consecutively, while ``channel_major``
     stores all query channels, then all key channels, then all value channels.
     When ``position_kernel`` is set, a depthwise convolution of that kernel is
-    added to the value map before the attention product.
+    added to the value map before the attention product. The term is added
+    before attention mixes spatial sites, so each output receives an
+    attention-weighted mixture of the positional signals. That placement is a
+    fixed LibreYOLO design decision; ``position_kernel`` only selects the
+    kernel or disables the term.
 
     The explicit score matrix is quadratic in the number of sites. It is sized
     for the stage-10 20x20 map and is not intended for finer strides.

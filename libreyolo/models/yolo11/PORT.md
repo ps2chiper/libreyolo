@@ -301,9 +301,13 @@ Fixed choices that remain in code are LibreYOLO design decisions, not sourced
 details: the feed-forward path is two convolutions; the QKV, projection and
 position convolutions use the native `Conv` without activation; both tower
 output projections are bare convolutions without normalization or activation;
-the position term is a depthwise convolution; and the remaining convolution
-blocks (C2PSA cv1/cv2, the FFN and the tower stages) use the native `Conv` with
-BatchNorm and SiLU, except the FFN output convolution, which has no activation.
+the position term is a depthwise convolution whose output is added to the value
+map before attention mixes spatial sites, so each output receives an
+attention-weighted mixture of the positional signals; and the remaining
+convolution blocks (C2PSA cv1/cv2, the FFN and the tower stages) use the native
+`Conv` with BatchNorm and SiLU, except the FFN output convolution, which has no
+activation. The numerical reference test reproduces this ordering, so it
+verifies the implementation of the choice, not an external source.
 Initialization is out of scope for this interface.
 
 ### Verified contract and evidence
@@ -329,11 +333,37 @@ each DOI. The notes summarize their descriptions in new wording.
 | Nano PSA repeat count after scaling | Open. Algorithm A1 is titled "YOLOv11n" and writes `n=2`, but the handoff leaves the instantiated nano count open because scaling may reduce it. `blocks` is required. |
 | Head count, per-head query/key/value widths and packing | Open. `PSATopology` requires them. The attended width follows from `channels`, the source-backed expansion 0.5 and the required `split_ratio`. |
 | Split widths | Open. `C2PSA` requires `split_ratio`. |
-| Position term | The operation is fixed as a depthwise convolution, a LibreYOLO design decision; `position_kernel` is required and may be `None`. |
+| Position term | The depthwise operation and its addition to the value map before attention are fixed LibreYOLO design decisions; `position_kernel` is required and may be `None`. |
 | Feed-forward kernel and dimension | Open. `ffn_kernel` and `ffn_expansion` are required. |
 | Residual placement | Open. `residual` selects both sublayers, attention only, feed-forward only or neither. |
 | Tower hidden widths, box and class kernels, box grouping, class stage order, pointwise and output projection kernels, output bias | Open. `TowerTopology` requires all of them. The classification depthwise grouping is fixed because the source names DWConv. |
 | Initialization | Out of scope for this interface. |
+
+### Named experimental preset
+
+[presets.py](presets.py) exports `EXPERIMENTAL_NANO`, named
+`yolo11n-experimental` at version `0.1.0`. It fixes every value two callers
+would otherwise choose differently.
+
+| Field | Value |
+|---|---|
+| Stage width and expansion | 256 and 0.5 (source-backed) |
+| Blocks and split ratio | 1 and 0.5 |
+| Heads and per-head query/key/value widths | 3 and 16/16/32 |
+| Packing | `head_major` |
+| Position term | 3x3 depthwise, added to the value map before attention |
+| Feed-forward | 1x1, expansion 2, no output activation |
+| Residual | both sublayers |
+| Box tower | width 48, 3x3 kernels, one group |
+| Class tower | width 40, 3x3 depthwise, 1x1 pointwise, `dw_pw` |
+| Output projections | 1x1, bias on |
+| Level widths | 64/128/256 (source-backed) |
+
+The preset is explicitly experimental. Only the stage width, expansion and
+level widths are source-backed; every other value is a LibreYOLO design
+decision. Exact YOLO11n parity still requires independent support for the open
+items above. The public entry point is `build_experimental_nano(num_classes)`,
+exported from the family package.
 
 The modules deliberately contain no parameter-count or checkpoint-compatibility
 test. Their parameter counts depend on the caller topology and are not parity
@@ -344,17 +374,21 @@ evidence.
 - `tests/unit/test_yolo11_attention.py` checks shape preservation on a 20x20
   map and on a rectangular 20x36 map, finite outputs and gradients, both
   packing modes against an explicit channel-index reference, all four residual
-    placements, an asymmetric 0.3 split, a 0.25 expansion, a 3x3 feed-forward
-    kernel, rectangular-map gradients, the omitted position term and topology
-    validation.
+  placements, an asymmetric 0.3 split, a 0.25 expansion, a 3x3 feed-forward
+  kernel, rectangular-map gradients, the omitted position term and topology
+  validation.
 - `tests/unit/test_yolo11_detect.py` checks raw and decoded shapes for C=3 and
   C=80 with batch 2 at 640, decoded level order and strides, a rectangular
   320x640 canvas, box-first channel order, output bias on and off, both class
   stage orders, box groups of 4 with 5x5 kernels and 3x3 pointwise and output
-  projections, mixed batch and dtype rejection, and gradients.
+  projections, mixed batch and dtype rejection, and that a rejected late level
+  leaves BatchNorm statistics unchanged.
+- `tests/unit/test_yolo11_presets.py` checks the preset name and version,
+  builds it through `build_experimental_nano`, runs stage 10, and decodes the
+  raw maps at 640.
 - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
   unchanged.
-- `pytest tests/unit/test_yolo11_*.py`: 31 passed.
+- `pytest tests/unit/test_yolo11_*.py`: 35 passed.
 
 ## Paper references
 

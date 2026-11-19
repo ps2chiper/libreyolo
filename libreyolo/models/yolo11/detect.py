@@ -198,9 +198,8 @@ class YOLO11Head(nn.Module):
                 f"Expected {self.nl} feature levels, got {len(features)}"
             )
         batch = dtype = None
-        outputs = []
-        for index, (level, channels, box, cls) in enumerate(
-            zip(features, self.in_channels, self.box_towers, self.class_towers)
+        for index, (level, channels) in enumerate(
+            zip(features, self.in_channels)
         ):
             if level.ndim != 4 or level.shape[1] != channels:
                 raise ValueError(
@@ -216,5 +215,10 @@ class YOLO11Head(nn.Module):
                 raise ValueError("All feature levels must share a batch size")
             elif level.dtype != dtype:
                 raise ValueError("All feature levels must share a dtype")
+
+        # No tower runs until every level has passed validation, so a rejected
+        # batch cannot update BatchNorm statistics partway through.
+        outputs = []
+        for level, box, cls in zip(features, self.box_towers, self.class_towers):
             outputs.append(torch.cat((box(level), cls(level)), dim=1))
         return outputs

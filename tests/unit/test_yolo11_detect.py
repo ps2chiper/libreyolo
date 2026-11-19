@@ -171,6 +171,30 @@ def test_rejects_mixed_batch_and_dtype():
         head(mixed_dtype)
 
 
+def test_rejected_late_level_leaves_batch_norm_statistics_unchanged():
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).train()
+    before = {
+        name: buffer.detach().clone() for name, buffer in head.named_buffers()
+    }
+
+    bad = features(1)
+    bad[2] = torch.randn(1, 128, 20, 20)  # P5 expects 256 channels.
+    with pytest.raises(ValueError, match="channels"):
+        head(bad)
+
+    for name, buffer in head.named_buffers():
+        torch.testing.assert_close(buffer, before[name], rtol=0, atol=0)
+
+    # A valid call must still update the statistics, proving the snapshot can
+    # detect a change rather than comparing two untouched buffers.
+    head(features(1))
+    assert any(
+        not torch.equal(buffer, before[name])
+        for name, buffer in head.named_buffers()
+        if buffer.is_floating_point()
+    )
+
+
 def test_two_stage_structure_is_explicit():
     head = YOLO11Head(3, NANO_LEVELS, TOPO)
     assert len(head.box_towers[0]) == 3
