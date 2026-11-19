@@ -842,6 +842,19 @@ Used for: the class-aware suppression step of EmbeddedNMSDetector in
           is reproduced in libreyolo/models/fcn/NOTICE.
 
 --------------------------------------------------------------------
+Experimental YOLO11n (libreyolo/models/yolo11/)
+--------------------------------------------------------------------
+The experimental detector reuses LibreYOLO's YOLO9 convolution blocks,
+distribution decoder, assignment, loss and training transforms. Their
+MultimediaTechLab/YOLO source and MIT license are identified below.
+Training also uses the shared YOLOX-derived mosaic and EMA. Prediction
+and validation use the MMDetection-derived candidate filter. See the
+YOLOX and mmdetection entries for those Apache-2.0 components and
+libreyolo/models/yolo11/NOTICE for the family attribution. The accompanying
+PORT.md records the paper references, decoder contract and experimental
+architecture choices.
+
+--------------------------------------------------------------------
 YOLO (MultimediaTechLab/YOLO)
 --------------------------------------------------------------------
 Source: https://github.com/MultimediaTechLab/YOLO

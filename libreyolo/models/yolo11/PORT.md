@@ -322,6 +322,27 @@ and [author's description](https://github.com/IMvision12/kyolo/blob/8558c9c941dd
 
 ## Interface implementation from the clean-room handoff
 
+### Contributor provenance record (pending)
+
+For the attention implementation introduced in `0912a67` and the detection
+towers introduced in `0d78bfc`, the implementer still needs to record:
+
+- Which revisions they wrote or reviewed, which handoff version they received,
+  and the materials they actually consulted for each module (paper section,
+  figure or DOI, or repository, commit, file and license).
+- Which attention decisions came from those materials and which they designed
+  themselves, including split widths, QKV layout, positional operation and
+  residual placement. For the detection towers, cover widths, grouping,
+  depthwise/pointwise order and output projections. Identify who selected
+  the concrete values in the experimental preset.
+- Any prior exposure to implementations of either tower, including through
+  snippets, generated suggestions or the earlier comparison work, and which
+  decisions that exposure may have influenced. Record any third-party code
+  adapted and confirm the right to submit the contribution under MIT.
+
+The implementer should provide this first-hand account for maintainer review.
+The source comparisons and synthetic tests cannot establish development history.
+
 [attention.py](attention.py) and [detect.py](detect.py) implement the contracts
 the handoff verifies. They fix only the structures the sources establish: the
 C2PSA split, attention blocks, concatenation and final convolution; two stages

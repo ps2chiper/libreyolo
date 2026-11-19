@@ -472,6 +472,7 @@ libreyolo = [
     "models/yolo7/*.yaml",
     "models/**/NOTICE",
     "models/**/LICENSE",
+    "models/memfof/_vendor/LICENSE-GMA",
     "models/**/*.md",
 ]
 
