@@ -71,6 +71,42 @@ def test_forward_entry_point_matches_the_explicit_path(detector):
     torch.testing.assert_close(decoded, detector.decoder(raw))
 
 
+def test_pixels_backpropagate_through_every_network_stage(detector):
+    detector.zero_grad(set_to_none=True)
+    images = torch.randn(1, 3, 64, 64, requires_grad=True)
+    detector(images).sum().backward()
+
+    stages = [
+        detector.stem,
+        detector.stage1,
+        detector.down1,
+        detector.stage2,
+        detector.down2,
+        detector.stage3,
+        detector.down3,
+        detector.stage4,
+        detector.sppf,
+        detector.attention,
+        detector.neck_td1,
+        detector.neck_p3,
+        detector.neck_down1,
+        detector.neck_p4,
+        detector.neck_down2,
+        detector.neck_p5,
+        detector.head.box_towers[0],
+        detector.head.box_towers[2],
+        detector.head.class_towers[0],
+        detector.head.class_towers[2],
+    ]
+    for stage in stages:
+        assert any(
+            parameter.grad is not None and parameter.grad.abs().sum() > 0
+            for parameter in stage.parameters()
+        ), f"No gradient reached {type(stage).__name__}"
+
+    detector.zero_grad(set_to_none=True)
+
+
 @pytest.mark.parametrize(
     ("shape", "message"),
     [

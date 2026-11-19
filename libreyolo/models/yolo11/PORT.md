@@ -435,8 +435,9 @@ maps and `forward` returns decoded detections.
   maps and (2, 7, 8400) detections. A 320x640 pass produces 40x80, 20x40 and
   10x20 maps and (1, 7, 4200) detections. A 64x64 pass checks the public
   `forward` and `forward_raw` entry points against the explicit head and decoder
-  path. The file also checks malformed image rejection and builder type checks.
-- `pytest tests/unit/test_yolo11_*.py`: 52 passed.
+  path, and backpropagation reaches every backbone, neck and head stage. The
+  file also checks malformed image rejection and builder type checks.
+- `pytest tests/unit/test_yolo11_*.py`: 53 passed.
 
 With two Gloo ranks and one P5 value per channel on each rank, the CPU device
 check rejects distributed SyncBatchNorm training before any tower updates its
