@@ -54,7 +54,8 @@ def test_only_float16_amp_enables_grad_scaling():
 
 
 @pytest.mark.unit
-def test_trainer_autocast_context_uses_configured_dtype(monkeypatch):
+@pytest.mark.parametrize("device_type", ["cuda", "xpu"])
+def test_trainer_autocast_context_uses_configured_dtype(monkeypatch, device_type):
     calls = []
 
     class _Context:
@@ -69,17 +70,17 @@ def test_trainer_autocast_context_uses_configured_dtype(monkeypatch):
         return _Context()
 
     monkeypatch.setattr("libreyolo.training.trainer.autocast", fake_autocast)
-    trainer = SimpleNamespace(config=SimpleNamespace(amp_dtype="bfloat16"))
+    trainer = SimpleNamespace(device=torch.device(device_type), config=SimpleNamespace(amp_dtype="bfloat16"))
 
     # Without a CUDA graph manager the autocast weight cache stays enabled.
     with BaseTrainer._autocast_context(trainer):
         pass
 
-    assert calls == [("cuda", torch.bfloat16, True)]
+    assert calls == [(device_type, torch.bfloat16, True)]
 
     # With a manager active the capture recipe requires the cache disabled.
     trainer._cuda_graph_manager = object()
     with BaseTrainer._autocast_context(trainer):
         pass
 
-    assert calls[-1] == ("cuda", torch.bfloat16, False)
+    assert calls[-1] == (device_type, torch.bfloat16, False)

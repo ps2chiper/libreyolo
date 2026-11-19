@@ -54,9 +54,14 @@ The trainer passes the three raw feature maps to LibreYOLO's native task-aligned
 assignment and box, classification and distribution focal losses. Validation uses
 the preset's centered letterbox and decoder for detection metrics. Setting
 `val_loss=True` adds per-component losses during training-time validation.
+On a single Intel GPU with an XPU-enabled PyTorch build, select
+`device="xpu:0"` explicitly. The training loader pins host batches for transfer.
+AMP defaults to BF16 on XPU. Explicit FP16 training uses PyTorch's gradient
+scaler, which requires FP64 support for unscaling on XPU.
+`amp=False` selects FP32 training.
 The CPU smoke test trains for one epoch on four synthetic images, reloads the
 checkpoint and runs standalone validation on two held-out images. Export
-integration and real-dataset accuracy evaluation remain open.
+integration and large-scale detection accuracy evaluation remain open.
 
 ## Published scale presets
 

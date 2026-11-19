@@ -1,3 +1,5 @@
+import torch
+
 from ...preprocess.letterbox import LETTERBOX_CENTER
 from ...training.trainer import BaseTrainer
 from ..yolo9.loss import YOLO9Loss
@@ -10,6 +12,12 @@ class ExperimentalNanoTrainer(DenseDetectionRecipe, BaseTrainer):
     """Train the experimental head with the native task-aligned box/class/DFL loss."""
 
     artifact_model_families = ("yolo11_experimental",)
+    amp_device_types = ("cuda", "xpu")
+
+    def _dataloader_options(self):
+        if self.device.type == "xpu":
+            return {"pin_memory": True}
+        return super()._dataloader_options()
 
     @classmethod
     def _config_class(cls):
@@ -27,6 +35,17 @@ class ExperimentalNanoTrainer(DenseDetectionRecipe, BaseTrainer):
         return LETTERBOX_CENTER
 
     def on_setup(self):
+        # PyTorch's gradient unscale computes the reciprocal in FP64.
+        if (
+            self.device.type == "xpu"
+            and self.config.amp
+            and self.config.amp_dtype == "float16"
+            and not torch.xpu.get_device_properties(self.device).has_fp64
+        ):
+            raise ValueError(
+                "FP16 gradient scaling requires FP64 on this XPU. "
+                "Use amp_dtype='bfloat16' or amp=False for FP32."
+            )
         head = self.wrapper_model.model.head
         self.loss = YOLO9Loss(
             num_classes=head.nc, reg_max=head.reg_max,

@@ -206,6 +206,7 @@ class BaseTrainer(ABC):
     """
 
     best_metric_key: str = "metrics/mAP50-95"
+    amp_device_types = ("cuda",)
     artifact_model_families: Tuple[str, ...] = ()
     # Whether this family supports ``lora=True`` fine-tuning. Overridden to True
     # by trainers with LoRA-amenable (transformer/nn.Linear) backbones.
@@ -1925,10 +1926,11 @@ class BaseTrainer(ABC):
                     + ")"
                 )
 
-        if self.config.amp and self.device.type == "cuda":
+        if self.config.amp and self.device.type in self.amp_device_types:
             amp_torch_dtype = torch_amp_dtype(self.config.amp_dtype)
             if (
                 amp_torch_dtype == torch.bfloat16
+                and self.device.type == "cuda"
                 and torch.cuda.is_available()
                 and not torch.cuda.is_bf16_supported()
             ):
@@ -1938,7 +1940,7 @@ class BaseTrainer(ABC):
             # FP16 needs loss scaling. BF16's wider exponent range does not,
             # but a disabled scaler keeps the optimizer path shared.
             self.scaler = GradScaler(
-                "cuda", enabled=amp_uses_grad_scaler(self.config.amp_dtype)
+                self.device.type, enabled=amp_uses_grad_scaler(self.config.amp_dtype)
             )
             if is_main_process():
                 logger.info(
@@ -2097,14 +2099,14 @@ class BaseTrainer(ABC):
         return False
 
     def _autocast_context(self):
-        """Create a CUDA autocast context using the configured dtype.
+        """Create the training device's autocast context using the configured dtype.
 
         With CUDA graph training capture active, autocast's weight-cast
         cache must be disabled: the capture recipe requires cache_enabled
         =False so warm-up, capture and replay all see the same cast ops.
         """
         return autocast(
-            "cuda",
+            self.device.type,
             dtype=torch_amp_dtype(getattr(self.config, "amp_dtype", "float16")),
             cache_enabled=getattr(self, "_cuda_graph_manager", None) is None,
         )

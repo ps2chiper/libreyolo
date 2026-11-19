@@ -11,3 +11,9 @@ class ExperimentalNanoConfig(YOLO9Config):
     name: str = "yolo11_experimental"
     letterbox_pad: str = "center"
     aux_weight: float = 0.0
+
+    @classmethod
+    def from_kwargs(cls, /, **kwargs):
+        if str(kwargs.get("device", "")).lower().split(":")[0] == "xpu":
+            kwargs.setdefault("amp_dtype", "bfloat16")
+        return super().from_kwargs(**kwargs)
