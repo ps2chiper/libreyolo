@@ -214,6 +214,61 @@ def test_singleton_input_remains_valid_in_evaluation(detector):
     assert tuple(decoded.shape) == (1, 7, 21)
 
 
+def test_evaluation_mode_missing_running_buffers_is_rejected_before_stem(detector):
+    layer = next(
+        module
+        for module in detector.neck_p5.modules()
+        if isinstance(module, torch.nn.BatchNorm2d)
+    )
+    mean = layer.running_mean.detach().clone()
+    var = layer.running_var.detach().clone()
+    tracked = layer.track_running_stats
+
+    detector.eval()
+    detector.stem.train()
+    layer.track_running_stats = False
+    layer._buffers["running_mean"] = None
+    layer._buffers["running_var"] = None
+    try:
+        snapshot = _snapshot_buffers(detector)
+        with pytest.raises(ValueError, match="more than one value per channel"):
+            detector.forward_features(torch.randn(1, 3, 32, 32))
+        _assert_buffers_unchanged(detector, snapshot)
+    finally:
+        layer.running_mean = mean
+        layer.running_var = var
+        layer.track_running_stats = tracked
+        detector.eval()
+
+
+def test_feature_only_call_ignores_a_training_head(detector):
+    detector.eval()
+    detector.head.train()
+    try:
+        with torch.no_grad():
+            features = detector.forward_features(torch.randn(1, 3, 32, 32))
+        assert [tuple(level.shape) for level in features] == [
+            (1, 64, 4, 4),
+            (1, 128, 2, 2),
+            (1, 256, 1, 1),
+        ]
+    finally:
+        detector.eval()
+
+
+def test_full_path_checks_a_training_head_before_the_stem(detector):
+    detector.eval()
+    detector.stem.train()
+    detector.head.train()
+    try:
+        snapshot = _snapshot_buffers(detector)
+        with pytest.raises(ValueError, match="more than one value per channel"):
+            detector.forward_raw(torch.randn(1, 3, 32, 32))
+        _assert_buffers_unchanged(detector, snapshot)
+    finally:
+        detector.eval()
+
+
 def test_builder_rejects_a_non_integer_class_count():
     with pytest.raises(TypeError, match="num_classes"):
         build_experimental_detector(1.5)  # type: ignore[arg-type]

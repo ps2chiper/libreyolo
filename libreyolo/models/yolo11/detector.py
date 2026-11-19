@@ -13,13 +13,16 @@ from __future__ import annotations
 from numbers import Integral
 
 import torch
-import torch.distributed as dist
 from torch import Tensor, nn
 from torch.nn.modules.batchnorm import _BatchNorm
 
 from ..yolo9.nn import Conv
 from .decoder import YOLO11nDecoder
 from .detect import YOLO11Head
+from .normalization import (
+    batch_norm_needs_batch_statistics,
+    sync_batch_norm_needs_accelerator,
+)
 from .presets import EXPERIMENTAL_NANO, YOLO11NPreset
 
 # Algorithm A1, YOLOv11n: stem widths, stage widths and stage repeats.
@@ -28,38 +31,6 @@ STAGE_CHANNELS = (64, 128, 128, 256)
 STAGE_SHORTCUTS = (False, False, True, True)
 NECK_CHANNELS = (128, 64, 128, 256)
 C3K2_EXPANSION = 0.5
-
-
-def _sync_world_size(module: nn.SyncBatchNorm) -> int:
-    """Process-group width, or one when synchronization is unavailable."""
-    if not dist.is_available() or not dist.is_initialized():
-        return 1
-    try:
-        return int(dist.get_world_size(module.process_group))
-    except (RuntimeError, ValueError):
-        return 1
-
-
-def _requires_local_batch_statistics(module: _BatchNorm) -> bool:
-    if not module.training:
-        return False
-    return not (
-        isinstance(module, nn.SyncBatchNorm) and _sync_world_size(module) > 1
-    )
-
-
-def _sync_batch_norm_needs_accelerator(module: _BatchNorm) -> bool:
-    if not isinstance(module, nn.SyncBatchNorm) or not module.training:
-        return False
-    if not dist.is_available() or not dist.is_initialized():
-        return False
-    if module.weight is not None:
-        device = module.weight.device
-    elif module.running_mean is not None:
-        device = module.running_mean.device
-    else:
-        device = torch.device("cpu")
-    return device.type == "cpu"
 
 
 class Bottleneck11(nn.Module):
@@ -213,43 +184,7 @@ class YOLO11Detector(nn.Module):
         self.head: YOLO11Head = preset.build_head(num_classes)
         self.decoder = YOLO11nDecoder()
 
-    def _check_normalization_preflight(
-        self,
-        batch: int,
-        height: int,
-        width: int,
-    ) -> None:
-        for module in self.modules():
-            if _sync_batch_norm_needs_accelerator(module):
-                raise ValueError(
-                    "Distributed training with SyncBatchNorm needs an accelerator"
-                )
-        minimum_sites = batch * (height // 32) * (width // 32)
-        if minimum_sites > 1:
-            return
-        p5_roots = (
-            self.down3,
-            self.stage4,
-            self.sppf,
-            self.attention,
-            self.neck_down2,
-            self.neck_p5,
-            self.head.box_towers[2],
-            self.head.class_towers[2],
-        )
-        for root in p5_roots:
-            for module in root.modules():
-                if isinstance(module, _BatchNorm) and _requires_local_batch_statistics(
-                    module
-                ):
-                    raise ValueError(
-                        "Training images must give every normalization layer more "
-                        "than one value per channel; increase the batch or spatial "
-                        "size, or put the affected layers in evaluation mode"
-                    )
-
-    def forward_features(self, images: Tensor) -> list[Tensor]:
-        """Return the neck's P3, P4 and P5 feature maps for an image tensor."""
+    def _validate_images(self, images: Tensor) -> tuple[int, int, int]:
         if images.ndim != 4 or images.shape[1] != 3:
             raise ValueError(
                 f"Expected a BCHW image tensor with three channels, "
@@ -265,8 +200,69 @@ class YOLO11Detector(nn.Module):
             raise ValueError("Image height and width must be positive")
         if height % 32 or width % 32:
             raise ValueError("Image height and width must be multiples of 32")
-        self._check_normalization_preflight(batch, height, width)
+        return batch, height, width
 
+    def _check_normalization_preflight(
+        self,
+        batch: int,
+        height: int,
+        width: int,
+        *,
+        include_head: bool,
+    ) -> None:
+        """Validate the modules this entry point will execute before any conv."""
+        feature_roots = (
+            self.stem,
+            self.stage1,
+            self.down1,
+            self.stage2,
+            self.down2,
+            self.stage3,
+            self.down3,
+            self.stage4,
+            self.sppf,
+            self.attention,
+            self.neck_td1,
+            self.neck_p3,
+            self.neck_down1,
+            self.neck_p4,
+            self.neck_down2,
+            self.neck_p5,
+        )
+        roots = feature_roots + ((self.head,) if include_head else ())
+        for root in roots:
+            for module in root.modules():
+                if sync_batch_norm_needs_accelerator(module):
+                    raise ValueError(
+                        "Distributed training with SyncBatchNorm needs an "
+                        "accelerator"
+                    )
+
+        minimum_sites = batch * (height // 32) * (width // 32)
+        if minimum_sites > 1:
+            return
+        p5_roots = (
+            self.down3,
+            self.stage4,
+            self.sppf,
+            self.attention,
+            self.neck_down2,
+            self.neck_p5,
+        )
+        if include_head:
+            p5_roots += (self.head.box_towers[2], self.head.class_towers[2])
+        for root in p5_roots:
+            for module in root.modules():
+                if isinstance(module, _BatchNorm) and batch_norm_needs_batch_statistics(
+                    module
+                ):
+                    raise ValueError(
+                        "Training images must give every normalization layer more "
+                        "than one value per channel; increase the batch or spatial "
+                        "size, or put the affected layers in evaluation mode"
+                    )
+
+    def _run_features(self, images: Tensor) -> list[Tensor]:
         x = self.stem(images)
         x = self.stage1(x)
         x = self.down1(x)
@@ -287,9 +283,27 @@ class YOLO11Detector(nn.Module):
         p5 = self.neck_p5(torch.cat((x, f10), dim=1))
         return [p3, p4, p5]
 
+    def forward_features(self, images: Tensor) -> list[Tensor]:
+        """Return the neck's P3, P4 and P5 feature maps for an image tensor."""
+        batch, height, width = self._validate_images(images)
+        self._check_normalization_preflight(
+            batch,
+            height,
+            width,
+            include_head=False,
+        )
+        return self._run_features(images)
+
     def forward_raw(self, images: Tensor) -> list[Tensor]:
         """Run the image tensor through the network and return raw head maps."""
-        return self.head(self.forward_features(images))
+        batch, height, width = self._validate_images(images)
+        self._check_normalization_preflight(
+            batch,
+            height,
+            width,
+            include_head=True,
+        )
+        return self.head(self._run_features(images))
 
     def forward(self, images: Tensor) -> Tensor:
         """Return canvas-pixel xyxy boxes and class probabilities."""

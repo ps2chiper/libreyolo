@@ -402,7 +402,8 @@ names the operators without expanding them:
 | Upsampling | Nearest neighbour, scale 2 | Scale from lines 23 and 27; mode experimental |
 | Attention repeats | Preset value 1 | A1 illustrates `n=2`; the repeat count remains open |
 | Input geometry | Positive batch, positive height and width, both multiples of 32 | Design constraint for exact level shapes |
-| Singleton training | Rejected before the stem when a P5 normalization layer would use local batch statistics | Mode-aware preflight; frozen P5 layers and evaluation mode remain supported |
+| Singleton normalization | Rejected before the stem when a P5 layer needs batch statistics | Shared head predicate; evaluation mode with both running buffers absent also needs batch statistics |
+| Preflight scope | Feature-only calls check the backbone and neck; `forward_raw` and `forward` also check the head before the stem | Matches the modules each entry point executes |
 
 `build_experimental_detector(num_classes)` is the public entry point.
 `forward_features` returns the three neck maps, `forward_raw` returns the head
@@ -441,8 +442,11 @@ maps and `forward` returns decoded detections.
   sizes are rejected before the stem. A training singleton at 32x32 is rejected
   before the backbone with zero buffer changes; a 32x64 training input, a
   singleton with frozen P5 normalization, and a singleton in evaluation remain
-  valid.
-- `pytest tests/unit/test_yolo11_*.py`: 60 passed.
+  valid. An evaluation-mode P5 layer with both running buffers absent is treated
+  as needing batch statistics and is rejected before the stem with zero buffer
+  changes. A feature-only call with a training head remains valid, while
+  `forward_raw` checks that training head before the stem.
+- `pytest tests/unit/test_yolo11_*.py`: 63 passed.
 
 With two Gloo ranks and one P5 value per channel on each rank, the CPU device
 check rejects distributed SyncBatchNorm training before any tower updates its

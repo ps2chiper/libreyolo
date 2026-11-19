@@ -23,10 +23,14 @@ from dataclasses import dataclass
 from numbers import Integral
 
 import torch
-import torch.distributed as dist
 from torch import Tensor, nn
 
 from ..yolo9.nn import Conv, auto_pad
+from .normalization import (
+    batch_norm_needs_batch_statistics,
+    sync_batch_norm_needs_accelerator,
+    sync_world_size,
+)
 
 _STAGE_ORDERS = ("dw_pw", "pw_dw")
 REG_MAX = 16
@@ -195,28 +199,15 @@ class YOLO11Head(nn.Module):
     @staticmethod
     def _sync_world_size(module) -> int:
         """World size for this layer's process group, or 1 when sync is off."""
-        if not (dist.is_available() and dist.is_initialized()):
-            return 1
-        try:
-            return dist.get_world_size(getattr(module, "process_group", None))
-        except (RuntimeError, ValueError):
-            return 1
+        return sync_world_size(module)
 
     def _batch_norm_needs_batch_statistics(self, module) -> bool:
         """Whether this layer normalizes with local batch statistics.
 
-        A SyncBatchNorm layer counts as synchronized only when its process
-        group spans more than one rank. That allowance assumes the input device
-        supports synchronized BatchNorm; CPU-only PyTorch builds reject
-        SyncBatchNorm inputs before any statistics are synchronized.
+        Delegates to the shared predicate so the detector and head make the
+        same decision, including evaluation mode with missing running buffers.
         """
-        if module.training:
-            is_synchronized = (
-                isinstance(module, nn.SyncBatchNorm)
-                and self._sync_world_size(module) > 1
-            )
-            return not is_synchronized
-        return module.running_mean is None and module.running_var is None
+        return batch_norm_needs_batch_statistics(module, self._sync_world_size)
 
     def _uses_batch_statistics(self, level: int) -> bool:
         """Whether any BatchNorm in this level's towers needs local batch statistics."""
@@ -256,13 +247,14 @@ class YOLO11Head(nn.Module):
                 raise ValueError(
                     "Feature levels need positive height and width"
                 )
-            if level.device.type == "cpu" and dist.is_available() and dist.is_initialized():
-                for tower in (self.box_towers[index], self.class_towers[index]):
-                    if any(
-                        isinstance(module, nn.SyncBatchNorm) and module.training
-                        for module in tower.modules()
-                    ):
-                        raise ValueError("Distributed training with SyncBatchNorm needs an accelerator")
+            if any(
+                sync_batch_norm_needs_accelerator(module)
+                for tower in (self.box_towers[index], self.class_towers[index])
+                for module in tower.modules()
+            ):
+                raise ValueError(
+                    "Distributed training with SyncBatchNorm needs an accelerator"
+                )
             if (
                 level.shape[0] * level.shape[2] * level.shape[3] <= 1
                 and self._uses_batch_statistics(index)
