@@ -12,7 +12,7 @@ def test_public_prediction_and_checkpoint_round_trip(tmp_path):
     model = LibreYOLO11Experimental(nb_classes=3, device="cpu")
     model.names = {0: "first", 1: "second", 2: "third"}
     image = Image.fromarray(np.arange(48 * 80 * 3, dtype=np.uint8).reshape(48, 80, 3))
-    options = dict(imgsz=64, conf=0.0, max_det=5)
+    options = {"imgsz": 64, "conf": 0.0, "max_det": 5}
     result = model.predict(image, **options)
     assert result.orig_shape == (48, 80)
     assert 0 < len(result.boxes) <= 5
@@ -32,10 +32,20 @@ def test_public_prediction_and_checkpoint_round_trip(tmp_path):
     checkpoint = torch.load(path, weights_only=True)
     assert checkpoint["preset_name"] == "yolo11n-experimental"
     assert checkpoint["preset_version"] == "0.1.0"
+    assert checkpoint["letterbox_pad"] == "center"
     checkpoint["preset_version"] = "unknown"
     torch.save(checkpoint, path)
     with pytest.raises(RuntimeError, match="preset_version"):
         LibreYOLO(str(path), device="cpu")
+
+
+def test_public_prediction_rounds_input_to_stride():
+    model = LibreYOLO11Experimental(nb_classes=2, device="cpu")
+    image = Image.fromarray(np.zeros((48, 80, 3), dtype=np.uint8))
+    result = model.predict(image, imgsz=100, conf=0.0, max_det=1)
+
+    assert result.orig_shape == (48, 80)
+    assert len(result.boxes) == 1
 
 
 def test_public_prediction_on_mixed_aspect_batch():

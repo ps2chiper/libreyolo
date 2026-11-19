@@ -2,6 +2,7 @@
 
 from functools import partial
 from pathlib import Path
+from typing import ClassVar
 
 from ...postprocess.yolo9 import postprocess
 from ...preprocess.letterbox import LETTERBOX_CENTER
@@ -15,12 +16,15 @@ class LibreYOLO11Experimental(BaseModel):
 
     FAMILY = "yolo11_experimental"
     FILENAME_PREFIX = "LibreYOLO11Experimental"
-    INPUT_SIZES = {"n": 640}
-    UNPUBLISHED_WEIGHTS = {
+    INPUT_SIZES: ClassVar[dict[str, int]] = {"n": 640}
+    IMGSZ_STRIDE = 32
+    LETTERBOX_PAD = LETTERBOX_CENTER
+    UNPUBLISHED_WEIGHTS: ClassVar[dict[str, str]] = {
         "LibreYOLO11Experimentaln": "Initialize the experimental preset from scratch."
     }
 
     def __init__(self, model_path=None, size="n", nb_classes=80, device="auto", task=None, **kwargs):
+        self.letterbox_pad = self.LETTERBOX_PAD
         if isinstance(model_path, Path):
             model_path = str(model_path)
         super().__init__(model_path, size, nb_classes, device, task, **kwargs)
@@ -57,6 +61,7 @@ class LibreYOLO11Experimental(BaseModel):
         return {
             "preset_name": self.model.preset.name,
             "preset_version": self.model.preset.version,
+            "letterbox_pad": self.letterbox_pad,
         }
 
     def _validate_loaded_state_dict_for_task(self, state_dict, checkpoint=None):
@@ -75,7 +80,7 @@ class LibreYOLO11Experimental(BaseModel):
     def _preprocess(self, image, color_format="auto", input_size=None):
         tensor, original, size = preprocess_image(
             image, self.input_size if input_size is None else input_size,
-            color_format=color_format, letterbox_pad=LETTERBOX_CENTER,
+            color_format=color_format, letterbox_pad=self.letterbox_pad,
         )
         return tensor, original, size, 1.0
 
@@ -86,5 +91,5 @@ class LibreYOLO11Experimental(BaseModel):
         return postprocess(
             output, conf_thres=conf_thres, iou_thres=iou_thres, original_size=original_size,
             max_det=max_det, input_size=kwargs.get("input_size", self.input_size),
-            letterbox=kwargs.get("letterbox", True), letterbox_pad=LETTERBOX_CENTER,
+            letterbox=kwargs.get("letterbox", True), letterbox_pad=self.letterbox_pad,
         )
