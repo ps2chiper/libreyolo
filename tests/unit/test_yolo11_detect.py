@@ -308,6 +308,17 @@ def test_sync_batch_norm_allows_local_singleton_when_sync_is_active(monkeypatch)
     assert head._uses_batch_statistics(2) is False
 
 
+def test_distributed_cpu_sync_batch_norm_rejected_before_earlier_towers(monkeypatch):
+    head = YOLO11Head(3, NANO_LEVELS, TOPO).train()
+    head.class_towers[2] = torch.nn.SyncBatchNorm.convert_sync_batchnorm(head.class_towers[2])
+    monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    before = _snapshot_buffers(head)
+    with pytest.raises(ValueError, match="SyncBatchNorm needs an accelerator"):
+        head(features(2))
+    _assert_buffers_unchanged(head, before)
+
+
 def test_track_running_stats_disabled_eval_uses_existing_buffers():
     head = YOLO11Head(3, NANO_LEVELS, TOPO).eval()
     for module in head.modules():

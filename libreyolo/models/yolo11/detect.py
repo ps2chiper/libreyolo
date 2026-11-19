@@ -233,7 +233,7 @@ class YOLO11Head(nn.Module):
 
         All levels are validated before any tower runs. A singleton level
         (``N*H*W <= 1``) is accepted only when that level's BatchNorm layers
-        use running statistics.
+        use running statistics or synchronize statistics across ranks.
         """
         if len(features) != self.nl:
             raise ValueError(
@@ -256,8 +256,16 @@ class YOLO11Head(nn.Module):
                 raise ValueError(
                     "Feature levels need positive height and width"
                 )
-            if self._uses_batch_statistics(index) and (
+            if level.device.type == "cpu" and dist.is_available() and dist.is_initialized():
+                for tower in (self.box_towers[index], self.class_towers[index]):
+                    if any(
+                        isinstance(module, nn.SyncBatchNorm) and module.training
+                        for module in tower.modules()
+                    ):
+                        raise ValueError("Distributed training with SyncBatchNorm needs an accelerator")
+            if (
                 level.shape[0] * level.shape[2] * level.shape[3] <= 1
+                and self._uses_batch_statistics(index)
             ):
                 raise ValueError(
                     "BatchNorm with batch statistics needs more than one value "

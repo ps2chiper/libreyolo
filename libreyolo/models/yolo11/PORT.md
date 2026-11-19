@@ -392,12 +392,12 @@ evidence.
   raw maps at 640.
 - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
   unchanged.
-- `pytest tests/unit/test_yolo11_*.py`: 43 passed.
+- `pytest tests/unit/test_yolo11_*.py`: 44 passed.
 
-The SyncBatchNorm path was probed with two Gloo ranks: the guard allowed the
-global two-sample singleton, but this CPU-only PyTorch build rejects
-SyncBatchNorm inputs before synchronization. Output and running-buffer
-equivalence still needs a two-rank accelerator check.
+With two Gloo ranks and one P5 value per channel on each rank, the CPU device
+check rejects distributed SyncBatchNorm training before any tower updates its
+running buffers. Synchronized output and running-buffer equivalence still
+needs a two-rank accelerator check.
 
 ## Paper references
 
