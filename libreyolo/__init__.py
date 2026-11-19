@@ -19,6 +19,7 @@ _MODEL_EXPORTS = (
     "LibreYOLO",
     "LibreYOLOX",
     "LibreYOLO9",
+    "LibreYOLO11Experimental",
     "LibreYOLO9E2E",
     "LibreYOLO9P2",
     "LibreYOLONAS",
@@ -339,6 +340,7 @@ __all__ = [
     # Main API
     "LibreYOLO",
     "LibreYOLO9",
+    "LibreYOLO11Experimental",
     "LibreYOLO9E2E",
     "LibreYOLO9P2",
     "LibreYOLONAS",

@@ -51,6 +51,7 @@ from .yolox.model import LibreYOLOX  # noqa: E402
 from .yolo9_e2e.model import LibreYOLO9E2E  # noqa: E402
 from .yolo9_p2.model import LibreYOLO9P2  # noqa: E402  (must precede LibreYOLO9: P2 checkpoints also match the base backbone/neck patterns)
 from .yolo9.model import LibreYOLO9  # noqa: E402
+from .yolo11.model import LibreYOLO11Experimental  # noqa: E402
 from .yolonas.model import LibreYOLONAS  # noqa: E402
 from .tinyformer.model import LibreTinyFormer  # noqa: E402  (DEIMv2 derivative; routing is enforced by can_load on backbone.sda. in both directions, not by this line — importing it pulls in models.deimv2 first, so it registers *after* LibreDEIMv2 regardless of position here)
 from .deimv2.model import LibreDEIMv2  # noqa: E402
@@ -940,6 +941,7 @@ __all__ = [
     "LibreYOLO",
     "LibreYOLOX",
     "LibreYOLO9",
+    "LibreYOLO11Experimental",
     "LibreYOLO9E2E",
     "LibreYOLO9P2",
     "LibreYOLONAS",

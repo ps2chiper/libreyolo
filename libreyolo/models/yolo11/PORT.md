@@ -19,10 +19,24 @@ implementer under LibreYOLO's provenance policy. For training, prefer native
 assignment, EMA, mosaic, batching and evaluation. Exact legacy behavior would
 require a separate provenance decision.
 
-The next integration milestone is a scratch-initialized detector that produces
-the decoder's three raw inputs. Factory registration, training, validation and
-export support should follow tests of that detector. This branch contains no
-family weights or download entry.
+## Public prediction and checkpoints
+
+`LibreYOLO11Experimental` builds the scratch-initialized experimental nano
+detector. Its registered family is `yolo11_experimental`, with size `n` and
+task `detect`. Use a trained local checkpoint for meaningful predictions.
+
+```python
+from libreyolo import LibreYOLO, LibreYOLO11Experimental
+
+model = LibreYOLO11Experimental(nb_classes=3)
+model.save("experimental.pt")
+restored = LibreYOLO("experimental.pt")
+result = restored.predict("photo.jpg")
+```
+
+Public checkpoints record the class names, class count, preset name and preset
+version. Loading checks the preset identity before applying the weights.
+Training, dataset validation and export integration are separate milestones.
 
 ## Published scale presets
 

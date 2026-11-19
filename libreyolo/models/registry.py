@@ -60,6 +60,7 @@ MODEL_GROUPS: dict[str, str] = {
     # s - sibling / zero-shot APIs covered separately
     "pe": "s",
     # g3 - inference-only specialists
+    "yolo11_experimental": "g3",
     "levjepa": "g3",
     "lwdetr": "g3",
     "riodetrv2": "g3",
