@@ -369,6 +369,44 @@ The modules deliberately contain no parameter-count or checkpoint-compatibility
 test. Their parameter counts depend on the caller topology and are not parity
 evidence.
 
+### Experimental image-to-detections assembly
+
+[detector.py](detector.py) connects the nano graph to the preset attention
+block, the head and the native decoder. Routing, widths and repeat counts follow
+Saeheaw, Algorithm A1, lines 2 to 41. The stage-10 attention repeat count is the
+preset's experimental value, so the assembled model is an experimental variant,
+not a parity claim.
+
+| Element | Value | Evidence |
+|---|---|---|
+| Stem | 3->16 and 16->32, 3x3 stride 2 | Algorithm A1, lines 2-3 |
+| Stage 1 | C3k2 64, n=1, shortcut off; Conv 64 stride 2 | Lines 6-7 |
+| Stage 2 | C3k2 128, n=1, shortcut off (F4); Conv 128 stride 2 | Lines 10-11 |
+| Stage 3 | C3k2 128, n=1, shortcut on (F6); Conv 256 stride 2 | Lines 14-15 |
+| Stage 4 | C3k2 256, n=1, shortcut on; SPPF 256, k=5; stage-10 attention | Lines 18-20 |
+| Top-down F13 | Upsample 2, concat F6, C3k2 128, n=2, shortcut off | Lines 23-25 |
+| P3 | Upsample 2, concat F4, C3k2 64, n=2, shortcut off | Lines 27-29 |
+| P4 | Conv 64 stride 2, concat F13, C3k2 128, n=2, shortcut off | Lines 32-34 |
+| P5 | Conv 128 stride 2, concat F10, C3k2 256, n=2, shortcut on | Lines 36-38 |
+| Detection | `Detect([P3, P4, P5])`, then the native decoder | Line 41; `decoder.py` |
+
+The C3k2 and SPPF internals are LibreYOLO design decisions, because Algorithm A1
+names the operators without expanding them:
+
+| Choice | Value | Status |
+|---|---|---|
+| C3k2 inner width | `int(out_channels * 0.5)` for each split branch | Experimental |
+| C3k2 topology | 1x1 to two equal splits, `n` sequential 3x3 bottleneck pairs, concat every branch, 1x1 projection | Experimental |
+| C3k2 variant | No C3k inner block; every repeat uses the same bottleneck | Experimental |
+| SPPF | Half-width 1x1, three serial 5x5 max pools, concat, 1x1 projection | Kernel from line 19; arrangement experimental |
+| Upsampling | Nearest neighbour, scale 2 | Scale from lines 23 and 27; mode experimental |
+| Attention repeats | Preset value 1 | A1 illustrates `n=2`; the repeat count remains open |
+| Input geometry | Height and width must be multiples of 32 | Design constraint for exact level shapes |
+
+`build_experimental_detector(num_classes)` is the public entry point.
+`forward_features` returns the three neck maps, `forward_raw` returns the head
+maps and `forward` returns decoded detections.
+
 ### Verification
 
 - `tests/unit/test_yolo11_attention.py` checks shape preservation on a 20x20
@@ -392,7 +430,12 @@ evidence.
   raw maps at 640.
 - The asymmetric side-order test in `tests/unit/test_yolo11_decoder.py` is
   unchanged.
-- `pytest tests/unit/test_yolo11_*.py`: 44 passed.
+- `tests/unit/test_yolo11_detector.py` starts from image tensors. A batch-2
+  640x640 pass produces 64x80x80, 128x40x40 and 256x20x20 neck maps, 64+C head
+  maps and (2, 7, 8400) detections. A 320x640 pass produces 40x80, 20x40 and
+  10x20 maps and (1, 7, 4200) detections. The file also checks malformed image
+  rejection and builder type checks.
+- `pytest tests/unit/test_yolo11_*.py`: 51 passed.
 
 With two Gloo ranks and one P5 value per channel on each rank, the CPU device
 check rejects distributed SyncBatchNorm training before any tower updates its
